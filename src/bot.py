@@ -21,6 +21,12 @@ from src.consejo import (
     assemble_full_response,
     format_target_label,
 )
+from src.actas import (
+    get_acta,
+    get_recent_actas,
+    format_acta_detail,
+    format_actas_list,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -269,7 +275,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Consejo de Administracion*\n"
         "/consejo — Mesa del consejo con controles\n"
         "/consulta <target> <tarea> — Consultar al consejo\n"
-        "  Targets: consejo, operativo, creativo, pareja:ROL, ROL\n\n"
+        "  Targets: consejo, operativo, creativo, pareja:ROL, ROL\n"
+        "/actas — Historial de consultas al consejo\n"
+        "/acta <n> — Detalle de un acta\n\n"
         "/help — Esta ayuda"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -314,10 +322,11 @@ async def cmd_consulta(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏛 Consultando al consejo... ({len(members)} miembros)"
     )
 
-    results = await dispatch_task(members, task)
+    results, acta_num = await dispatch_task(members, task, target)
     messages = assemble_full_response(target, task, results)
     for msg in messages:
         await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(f"📜 Guardado como acta *#{acta_num}*", parse_mode="Markdown")
 
 
 async def consejo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -360,13 +369,48 @@ async def process_consejo_task(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🏛 Consultando al consejo... ({len(members)} miembros)"
     )
 
-    results = await dispatch_task(members, task)
+    results, acta_num = await dispatch_task(members, task, target)
     messages = assemble_full_response(target, task, results)
     for msg in messages:
         await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(f"📜 Guardado como acta *#{acta_num}*", parse_mode="Markdown")
 
     context.user_data.pop("consejo_target", None)
     return ConversationHandler.END
+
+
+async def cmd_actas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show recent board consultations."""
+    actas = get_recent_actas(limit=10)
+    text = format_actas_list(actas)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_acta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show detail of a specific acta."""
+    if not context.args:
+        await update.message.reply_text("Uso: /acta <numero>\nEjemplo: /acta 3")
+        return
+    try:
+        num = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("El numero de acta debe ser un entero.")
+        return
+
+    acta = get_acta(num)
+    if not acta:
+        await update.message.reply_text(f"No existe el acta #{num}.")
+        return
+
+    text = format_acta_detail(acta)
+    if len(text) <= 3800:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    else:
+        # Split by responses
+        parts = text.split("\n" + "─" * 30)
+        for part in parts:
+            if part.strip():
+                await update.message.reply_text(part.strip(), parse_mode="Markdown")
 
 
 async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -404,6 +448,8 @@ def main():
     # Consejo de Administracion
     app.add_handler(CommandHandler("consejo", cmd_consejo))
     app.add_handler(CommandHandler("consulta", cmd_consulta))
+    app.add_handler(CommandHandler("actas", cmd_actas))
+    app.add_handler(CommandHandler("acta", cmd_acta))
     consejo_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(consejo_callback, pattern=r"^consejo:")],
         states={

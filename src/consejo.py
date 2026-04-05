@@ -288,12 +288,47 @@ def _pick_template(member: BoardMember, task: str) -> str:
     )
 
 
+def _build_llm_system_prompt(member: BoardMember, context_history: str) -> str:
+    """Construye el system prompt completo con contexto de actas previas."""
+    base = member.system_prompt
+    partner_role = PAIRS.get(member.role)
+    partner = BY_ROLE.get(partner_role) if partner_role else None
+
+    parts = [base]
+
+    parts.append(
+        f"\nFormas parte del Consejo de Administracion de AdmiraNext. "
+        f"El consejo tiene 8 sillas: 4 en el lado operativo (CEO, CFO, COO, CTO) "
+        f"y 4 en el lado creativo (CCO, CSO, CXO, CDO). "
+        f"Tu estas en el lado {member.side}."
+    )
+
+    if partner:
+        parts.append(
+            f"Tu pareja coetanea al otro lado de la mesa es {partner.name} ({partner.role}, "
+            f"{partner.title_es}). Cuando tomes una posicion, ten en cuenta que {partner.role} "
+            f"aporta el contraste desde {partner.domain}."
+        )
+
+    if context_history:
+        parts.append(f"\n{context_history}")
+
+    parts.append(
+        "\nIMPORTANTE: Responde SOLO en espanol. Maximo 2-3 parrafos cortos. "
+        "Se directo, aporta tu perspectiva unica y termina con una recomendacion concreta."
+    )
+
+    return "\n".join(parts)
+
+
 async def _generate_llm_response(
     member: BoardMember,
     task: str,
     http_session: aiohttp.ClientSession,
+    context_history: str = "",
 ) -> str:
     """Genera respuesta via API LLM (Anthropic Messages API)."""
+    system_prompt = _build_llm_system_prompt(member, context_history)
     headers = {
         "x-api-key": CONSEJO_LLM_API_KEY,
         "anthropic-version": "2023-06-01",
@@ -302,7 +337,7 @@ async def _generate_llm_response(
     payload = {
         "model": CONSEJO_LLM_MODEL,
         "max_tokens": CONSEJO_MAX_RESPONSE_LENGTH,
-        "system": member.system_prompt,
+        "system": system_prompt,
         "messages": [{"role": "user", "content": task}],
     }
     try:
@@ -312,7 +347,8 @@ async def _generate_llm_response(
             if resp.status == 200:
                 data = await resp.json()
                 return data["content"][0]["text"]
-            logger.warning(f"LLM API error for {member.role}: status={resp.status}")
+            body = await resp.text()
+            logger.warning(f"LLM API error for {member.role}: status={resp.status} body={body[:200]}")
             return _pick_template(member, task)
     except Exception as e:
         logger.warning(f"LLM API exception for {member.role}: {e}")
@@ -324,32 +360,58 @@ async def generate_response(
     task: str,
     use_llm: bool = False,
     http_session: aiohttp.ClientSession | None = None,
+    context_history: str = "",
 ) -> str:
     """Genera la respuesta de un consejero ante una tarea."""
     if use_llm and http_session and CONSEJO_LLM_API_KEY:
-        return await _generate_llm_response(member, task, http_session)
+        return await _generate_llm_response(member, task, http_session, context_history)
     return _pick_template(member, task)
 
 
 async def dispatch_task(
     members: list[BoardMember],
     task: str,
-) -> list[tuple[BoardMember, str]]:
-    """Despacha una tarea a N miembros y devuelve sus respuestas."""
+    target: str = "",
+) -> tuple[list[tuple[BoardMember, str]], int]:
+    """Despacha una tarea a N miembros, guarda acta y devuelve (respuestas, num_acta)."""
+    from src.actas import save_acta, get_context_for_llm
+
     use_llm = CONSEJO_USE_LLM
     session = None
+    context_history = ""
 
     if use_llm and CONSEJO_LLM_API_KEY:
         session = aiohttp.ClientSession()
+        context_history = get_context_for_llm(limit=3)
 
     try:
         responses = await asyncio.gather(
-            *[generate_response(m, task, use_llm, session) for m in members]
+            *[generate_response(m, task, use_llm, session, context_history) for m in members]
         )
-        return list(zip(members, responses))
+        result = list(zip(members, responses))
     finally:
         if session and not session.closed:
             await session.close()
+
+    # Guardar acta
+    acta_responses = [
+        {
+            "role": m.role,
+            "name": m.name,
+            "side": m.side,
+            "emoji": m.emoji,
+            "response": r,
+        }
+        for m, r in result
+    ]
+    acta_num = save_acta(
+        target=target or "desconocido",
+        task=task,
+        responses=acta_responses,
+        llm_mode=use_llm,
+    )
+
+    return result, acta_num
 
 
 # ── Formateo ───────────────────────────────────────────────
