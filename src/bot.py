@@ -27,6 +27,7 @@ from src.actas import (
     format_acta_detail,
     format_actas_list,
 )
+from src.dispatch_telegram import notify_consejero_bots
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -326,7 +327,19 @@ async def cmd_consulta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages = assemble_full_response(target, task, results)
     for msg in messages:
         await update.message.reply_text(msg, parse_mode="Markdown")
-    await update.message.reply_text(f"📜 Guardado como acta *#{acta_num}*", parse_mode="Markdown")
+
+    # Notificar a bots individuales
+    chat_id = update.message.chat_id
+    roles = [m.role for m in members]
+    resp_map = {m.role: r for m, r in results}
+    notified = await notify_consejero_bots(roles, task, chat_id, resp_map)
+    if notified:
+        await update.message.reply_text(
+            f"📜 Acta *#{acta_num}* | Notificados: {', '.join(notified)}",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(f"📜 Guardado como acta *#{acta_num}*", parse_mode="Markdown")
 
 
 async def consejo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -373,7 +386,19 @@ async def process_consejo_task(update: Update, context: ContextTypes.DEFAULT_TYP
     messages = assemble_full_response(target, task, results)
     for msg in messages:
         await update.message.reply_text(msg, parse_mode="Markdown")
-    await update.message.reply_text(f"📜 Guardado como acta *#{acta_num}*", parse_mode="Markdown")
+
+    # Notificar a bots individuales
+    chat_id = update.message.chat_id
+    roles = [m.role for m in members]
+    resp_map = {m.role: r for m, r in results}
+    notified = await notify_consejero_bots(roles, task, chat_id, resp_map)
+    if notified:
+        await update.message.reply_text(
+            f"📜 Acta *#{acta_num}* | Notificados: {', '.join(notified)}",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(f"📜 Guardado como acta *#{acta_num}*", parse_mode="Markdown")
 
     context.user_data.pop("consejo_target", None)
     return ConversationHandler.END

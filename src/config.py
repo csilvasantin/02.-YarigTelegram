@@ -16,3 +16,13 @@ CONSEJO_LLM_API_URL = os.getenv("CONSEJO_LLM_API_URL", "https://api.anthropic.co
 CONSEJO_LLM_API_KEY = os.getenv("CONSEJO_LLM_API_KEY", "")
 CONSEJO_LLM_MODEL = os.getenv("CONSEJO_LLM_MODEL", "claude-sonnet-4-20250514")
 CONSEJO_MAX_RESPONSE_LENGTH = int(os.getenv("CONSEJO_MAX_RESPONSE_LENGTH", "500"))
+
+# Bots individuales de consejeros (crear via @BotFather)
+BOT_TOKEN_CEO = os.getenv("BOT_TOKEN_CEO", "")
+BOT_TOKEN_CFO = os.getenv("BOT_TOKEN_CFO", "")
+BOT_TOKEN_COO = os.getenv("BOT_TOKEN_COO", "")
+BOT_TOKEN_CTO = os.getenv("BOT_TOKEN_CTO", "")
+BOT_TOKEN_CCO = os.getenv("BOT_TOKEN_CCO", "")
+BOT_TOKEN_CSO = os.getenv("BOT_TOKEN_CSO", "")
+BOT_TOKEN_CXO = os.getenv("BOT_TOKEN_CXO", "")
+BOT_TOKEN_CDO = os.getenv("BOT_TOKEN_CDO", "")
