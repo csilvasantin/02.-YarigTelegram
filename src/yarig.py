@@ -1,7 +1,10 @@
 """Yarig.ai integration — full platform access via API."""
 
+import json
 import logging
 import time
+from datetime import date, datetime
+from pathlib import Path
 import aiohttp
 
 from src.config import YARIG_EMAIL, YARIG_PASSWORD
@@ -22,8 +25,93 @@ SCORE_URL = f"{YARIG_BASE}/score/json_user_score"
 USERS_URL = f"{YARIG_BASE}/user/json_get_customers_and_mates_like"
 PROJECTS_URL = f"{YARIG_BASE}/projects/json_get_projects_like_by_customer_and_order"
 ADD_REQUEST_URL = f"{YARIG_BASE}/tasks/json_add_request"
+UNREAD_REQUESTS_URL = f"{YARIG_BASE}/tasks/json_get_unread_requests_by_user"
+REQUEST_DETAIL_URL = f"{YARIG_BASE}/tasks/json_get_task_request"
+UPDATE_REQUEST_STATE_URL = f"{YARIG_BASE}/tasks/json_update_state_task_request"
+OPEN_TASK_FROM_REQUEST_URL = f"{YARIG_BASE}/tasks/json_add_open_task_from_task_request"
 NOTIFICATIONS_URL = f"{YARIG_BASE}/system_notification/json_get_user_notifications"
 WORKING_STATE_URL = f"{YARIG_BASE}/working_state/json_change_state"
+
+
+COMPLETION_POINTS_FILE = Path(__file__).resolve().parent.parent / "state" / "completion_points.json"
+
+
+SPANISH_WEEKDAYS = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+SPANISH_MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _load_completion_points() -> dict[str, dict]:
+    try:
+        if COMPLETION_POINTS_FILE.exists():
+            data = json.loads(COMPLETION_POINTS_FILE.read_text())
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_completion_points(data: dict[str, dict]) -> None:
+    COMPLETION_POINTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COMPLETION_POINTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _task_sort_key(task: dict) -> tuple[int, str]:
+    finished = task.get("finished", "0") == "1"
+    started = bool(task.get("start_time"))
+    ended = bool(task.get("end_time"))
+    if started and not ended and not finished:
+        rank = 0
+    elif not started and not finished:
+        rank = 1
+    elif started and ended and not finished:
+        rank = 2
+    else:
+        rank = 3
+    return rank, str(task.get("description", "")).lower()
+
+
+def build_daily_opening_task_text(target_date: date | None = None) -> str:
+    target_date = target_date or datetime.now().date()
+    weekday = SPANISH_WEEKDAYS[target_date.weekday()]
+    month = SPANISH_MONTHS[target_date.month - 1]
+    return f"Hoy es {weekday} {target_date.day} de {month} de {target_date.year}"
+
+
+def _common_project_name(tasks: list[dict]) -> str:
+    names = {str((task.get("project") or "")).strip() for task in tasks if str((task.get("project") or "")).strip()}
+    if len(names) == 1:
+        return next(iter(names))
+    return ""
+
+
+def _format_elapsed_compact(start_value: str | None, end_value: str | None = None) -> str:
+    start_dt = _parse_dt(start_value)
+    if start_dt is None:
+        return ""
+    end_dt = _parse_dt(end_value) if end_value else datetime.now()
+    if end_dt is None:
+        end_dt = datetime.now()
+    total_seconds = max(int((end_dt - start_dt).total_seconds()), 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m"
+    return "<1m"
 
 
 class YarigClient:
@@ -34,6 +122,9 @@ class YarigClient:
         self.password = password
         self._session: aiohttp.ClientSession | None = None
         self._logged_in = False
+        self._cache_ttl_seconds = 300
+        self._team_cache: dict | None = None
+        self._projects_cache: dict[str, dict] = {}
 
     async def _ensure_session(self):
         if self._session is None or self._session.closed:
@@ -87,12 +178,67 @@ class YarigClient:
             logger.warning(f"Yarig request error: {e}")
             return None
 
+    def _cache_is_fresh(self, cached: dict | None) -> bool:
+        if not cached:
+            return False
+        return (time.time() - cached.get("ts", 0)) < self._cache_ttl_seconds
+
+
     @staticmethod
     def _esc(text: str) -> str:
         for ch in ("_", "*", "`", "["):
             text = text.replace(ch, f"\\{ch}")
         return text
 
+    @staticmethod
+    def _score_rank(score: int) -> tuple[str, str]:
+        if score >= 80:
+            return "💎", "Leyenda"
+        if score >= 40:
+            return "🚀", "Heroe"
+        if score >= 15:
+            return "🧭", "Explorador"
+        if score > 0:
+            return "✨", "Rookie"
+        if score < 0:
+            return "🫧", "En recuperacion"
+        return "◌", "Sin combo"
+
+    async def _get_score_value(self) -> int:
+        score_raw = await self._request(SCORE_URL)
+        try:
+            return int(score_raw) if isinstance(score_raw, (int, str)) else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def get_task_completion_points(self, task_id: str) -> int | None:
+        data = _load_completion_points()
+        entry = data.get(str(task_id))
+        if isinstance(entry, dict):
+            points = entry.get("points")
+            if isinstance(points, int):
+                return points
+        return None
+
+    def get_task_completion_badge(self, task_id: str) -> str:
+        points = self.get_task_completion_points(task_id)
+        if points is None:
+            return ""
+        sign = "+" if points >= 0 else ""
+        return f" · XP {sign}{points}"
+
+    def remember_task_completion_points(self, task_id: str, points: int) -> None:
+        data = _load_completion_points()
+        data[str(task_id)] = {
+            "points": int(points),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        _save_completion_points(data)
+
+    async def _get_score_summary_line(self) -> str:
+        score = await self._get_score_value()
+        icon, rank = self._score_rank(score)
+        return f"{icon} XP Yarig: *{score}* puntos · Rango: *{self._esc(rank)}*"
     # ── Tareas del día ──────────────────────────────────────
 
     async def get_today_data(self) -> dict | None:
@@ -101,33 +247,56 @@ class YarigClient:
     async def get_today_summary(self) -> str:
         data = await self.get_today_data()
         if not data:
-            return "No se pudo conectar con Yarig.ai"
+            return "No he podido conectar con Yarig.ai ahora mismo."
 
         tasks = data.get("tasks", [])
         clocking = data.get("clocking", [])
 
         if not tasks and not clocking:
-            return "Sin tareas ni jornada para hoy en Yarig.ai"
+            return "Todo en orden: no hay actividad registrada para hoy todavía."
 
-        lines = ["📋 *Tareas del día (Yarig.ai)*\n"]
+        score_line = await self._get_score_summary_line()
+        journey_elapsed = _format_elapsed_compact(clocking[0].get("datetime")) if clocking else ""
+        active_count = sum(1 for task in tasks if task.get("start_time") and not task.get("end_time") and task.get("finished", "0") == "0")
+        pending_count = sum(1 for task in tasks if not task.get("start_time") and task.get("finished", "0") == "0")
+        paused_count = sum(1 for task in tasks if task.get("start_time") and task.get("end_time") and task.get("finished", "0") == "0")
+        finished_count = sum(1 for task in tasks if task.get("finished", "0") == "1")
+        common_project = _common_project_name(tasks)
+        missions_header = "◌ *Misiones del dia*"
+        if journey_elapsed:
+            missions_header += f" · Tiempo transcurrido: *{journey_elapsed}*"
+        lines = ["✦ *Yarig.ai | Panel*", score_line, "", missions_header, f"● {active_count} activas · ◌ {pending_count} pendientes · ⏸ {paused_count} en pausa · ☑ {finished_count} completadas"]
+        if common_project:
+            lines.append(f"▣ Proyecto principal: _{self._esc(common_project)}_")
+        lines.append("")
 
-        for i, task in enumerate(tasks, 1):
+        indexed_tasks = list(enumerate(tasks, 1))
+        indexed_tasks.sort(key=lambda item: _task_sort_key(item[1]))
+
+        for i, task in indexed_tasks:
             desc = self._esc(task.get("description", "").strip())
             project = self._esc(task.get("project", ""))
             finished = task.get("finished", "0")
-            start = task.get("start_time")
-            end = task.get("end_time")
+            start_time = task.get("start_time")
+            end_time = task.get("end_time")
 
             if finished == "1":
-                status = "✅"
-            elif start and not end:
-                status = "▶️"
+                status = "☑"
+            elif start_time and not end_time:
+                status = "●"
             else:
-                status = "⏳"
+                status = "◌"
 
             line = f"{i}. {status} {desc}"
-            if project:
+            if project and project != self._esc(common_project):
                 line += f" — _{project}_"
+            if finished == "1":
+                task_elapsed = _format_elapsed_compact(start_time, end_time)
+                if task_elapsed:
+                    line += f" · ⏱ {task_elapsed}"
+                points_badge = self.get_task_completion_badge(str(task.get("id", "")))
+                if points_badge:
+                    line += points_badge
             lines.append(line)
 
         if not tasks:
@@ -137,23 +306,83 @@ class YarigClient:
             entry = clocking[0]
             name = self._esc(entry.get("name", ""))
             dt = entry.get("datetime", "?")
-            lines.append(f"\n🕐 Jornada de *{name}* iniciada: {dt}")
+            journey_elapsed = _format_elapsed_compact(dt)
+            if journey_elapsed:
+                lines.append(f"\n◔ Jornada de *{name}* iniciada: {dt} · ⏱ {journey_elapsed}")
+            else:
+                lines.append(f"\n◔ Jornada de *{name}* iniciada: {dt}")
 
         return "\n".join(lines)
+    async def get_status_summary(self) -> str:
+        """Return compact status for current workday, active task and score."""
+        data = await self.get_today_data()
+        if not data:
+            return "⚠️ No he podido conectar con Yarig.ai ahora mismo."
 
+        tasks = data.get("tasks", [])
+        clocking = data.get("clocking", [])
+        active = self._find_active_task(tasks)
+        score = await self._get_score_value()
+        score_icon, rank = self._score_rank(score)
+        lines = ["✦ *Yarig.ai | Estado*\n"]
+
+        if clocking:
+            entry = clocking[0]
+            name = self._esc(entry.get("name", ""))
+            dt = entry.get("datetime", "?")
+            journey_elapsed = _format_elapsed_compact(dt)
+            journey_line = f"◔ Sesion activa: *{name}* desde {dt}"
+            if journey_elapsed:
+                journey_line += f"\n⏱ Tiempo transcurrido: {journey_elapsed}"
+            lines.append(journey_line)
+        else:
+            lines.append("◔ Sesion: sin fichaje activo")
+
+        if active:
+            desc = self._esc(active.get("description", "").strip())
+            project = self._esc(active.get("project", ""))
+            start_time = active.get("start_time", "?")
+            task_elapsed = _format_elapsed_compact(active.get("start_time"), active.get("end_time"))
+            line = f"● Tarea activa: *{desc}*"
+            if project:
+                line += f" — _{project}_"
+            line += f"\n◔ Inicio: {start_time}"
+            if task_elapsed:
+                line += f"\n⏱ Dedicado a esta tarea: {task_elapsed}"
+            lines.append(line)
+        else:
+            pending_count = sum(
+                1
+                for task in tasks
+                if task.get("finished", "0") == "0" and not task.get("start_time")
+            )
+            paused_count = sum(
+                1
+                for task in tasks
+                if task.get("finished", "0") == "0" and task.get("start_time") and task.get("end_time")
+            )
+            lines.append(
+                "◌ Sin mision activa"
+                f"\n⏳ Pendientes: {pending_count}"
+                f"\n⏸ Pausadas: {paused_count}"
+            )
+
+        lines.append(f"{score_icon} XP actual: *{score}* puntos")
+        lines.append(f"◆ Rango actual: *{self._esc(rank)}*")
+        return "\n\n".join(lines)
     # ── Fichar ──────────────────────────────────────────────
 
     async def fichar_entrada(self) -> str:
         result = await self._request(CLOCKING_URL, {"type": 0, "todo": ""})
         if result:
-            return "✅ Jornada iniciada"
-        return "⚠️ No se pudo fichar entrada (¿ya estás fichado?)"
+            return "☑ Sesion iniciada"
+        return "⚠️ No he podido abrir la sesion. Puede que ya estuviera iniciada."
 
     async def fichar_salida(self, todo: str = "") -> str:
         result = await self._request(CLOCKING_URL, {"type": 1, "todo": todo})
         if result:
-            return "✅ Jornada finalizada"
-        return "⚠️ No se pudo fichar salida"
+            return "☑ Sesion cerrada"
+        return "⚠️ No he podido cerrar la sesion."
 
     # ── Horas extras ────────────────────────────────────────
 
@@ -165,12 +394,12 @@ class YarigClient:
         }
         if isinstance(result, int) and result in msgs:
             return msgs[result]
-        return "✅ Jornada de horas extras iniciada"
+        return "☑ Bloque extra iniciado"
 
     async def extras_fin(self) -> str:
         result = await self._request(CLOCKING_EXTRA_URL, {"type": 1})
         msgs = {
-            2: "✅ Jornada de horas extras finalizada",
+            2: "☑ Bloque extra finalizado",
             3: "⚠️ Ya finalizaste las horas extras hoy",
         }
         if isinstance(result, int) and result in msgs:
@@ -179,13 +408,25 @@ class YarigClient:
 
     # ── Añadir tarea ────────────────────────────────────────
 
+    async def ensure_daily_opening_task(self, project_id: int = 312) -> tuple[bool, str]:
+        task_text = build_daily_opening_task_text()
+        data = await self.get_today_data()
+        tasks = (data or {}).get("tasks", [])
+        for task in tasks:
+            if str(task.get("description", "")).strip().lower() == task_text.lower():
+                return False, task_text
+
+        result = await self.add_task(task_text, project_id=project_id)
+        return result.startswith("☑"), task_text
+
+
     async def add_task(self, description: str, project_id: int = 312, estimation: int = 1) -> str:
         tmp_id = int(time.time() * 1000)
         task_str = f"{tmp_id}#$#{estimation}#$#{description}#$#{project_id}@$@"
         result = await self._request(ADD_TASKS_URL, {"tasks": task_str})
         if result:
-            return f"✅ Tarea añadida: {description}"
-        return "⚠️ No se pudo añadir la tarea"
+            return f"☑ Nueva mision creada: {description}"
+        return "⚠️ No he podido crear la mision."
 
     # ── Iniciar / Parar tarea ───────────────────────────────
 
@@ -204,7 +445,7 @@ class YarigClient:
 
         tasks = data["tasks"]
         if task_index < 1 or task_index > len(tasks):
-            return f"⚠️ Tarea {task_index} no existe (hay {len(tasks)})"
+            return f"⚠️ La mision {task_index} no existe. Ahora mismo hay {len(tasks)} en la lista."
 
         task = tasks[task_index - 1]
         tid = task["id"]
@@ -212,10 +453,28 @@ class YarigClient:
         if result:
             desc = task.get("description", "").strip()
             was_started = task.get("start_time") is not None
-            icon = "🔄" if was_started else "▶️"
-            verb = "Reanudada" if was_started else "Iniciada"
-            return f"{icon} Tarea {verb}: {desc}"
-        return "⚠️ No se pudo iniciar la tarea"
+            icon = "↺" if was_started else "▶"
+            verb = "reanudada" if was_started else "en marcha"
+            return f"{icon} Mision {verb}: {desc}"
+        return "⚠️ No he podido poner en marcha esa mision."
+
+    async def iniciar_tarea_por_id(self, task_id: str) -> str:
+        data = await self.get_today_data()
+        if not data or not data.get("tasks"):
+            return "⚠️ No hay tareas para hoy"
+
+        task = next((t for t in data["tasks"] if str(t.get("id")) == str(task_id)), None)
+        if not task:
+            return "⚠️ Esa mision ya no aparece en la lista actual."
+
+        result = await self._request(OPEN_TASK_URL, {"id": task_id})
+        if result:
+            desc = task.get("description", "").strip()
+            was_started = task.get("start_time") is not None
+            icon = "↺" if was_started else "▶"
+            verb = "reanudada" if was_started else "en marcha"
+            return f"{icon} Mision {verb}: {desc}"
+        return "⚠️ No he podido poner en marcha esa mision."
 
     async def pausar_tarea(self) -> str:
         """Pause the active task (leave for later, not finished)."""
@@ -225,15 +484,30 @@ class YarigClient:
 
         active = self._find_active_task(data["tasks"])
         if not active:
-            return "⚠️ No hay ninguna tarea en curso"
+            return "⚠️ No hay ninguna mision en curso ahora mismo."
 
         tid = active["id"]
         # finished=0 → pause (dejar para luego)
         result = await self._request(CLOSE_TASK_URL, {"tid": tid, "finished": 0})
         if result is not None:
             desc = active.get("description", "").strip()
-            return f"⏸ Tarea pausada: {desc}\nUsa /iniciar para reanudarla"
-        return "⚠️ No se pudo pausar la tarea"
+            return f"⏸ Mision en pausa: {desc}\nLista para retomarla cuando quieras."
+        return "⚠️ No he podido poner la mision en pausa."
+
+    async def pausar_tarea_por_id(self, task_id: str) -> str:
+        data = await self.get_today_data()
+        if not data or not data.get("tasks"):
+            return "⚠️ No hay tareas para hoy"
+
+        task = next((t for t in data["tasks"] if str(t.get("id")) == str(task_id)), None)
+        if not task:
+            return "⚠️ Esa mision ya no aparece en la lista actual."
+
+        result = await self._request(CLOSE_TASK_URL, {"tid": task_id, "finished": 0})
+        if result is not None:
+            desc = task.get("description", "").strip()
+            return f"⏸ Mision en pausa: {desc}\nLista para retomarla cuando quieras."
+        return "⚠️ No he podido poner la mision en pausa."
 
     async def finalizar_tarea(self, task_index: int | None = None) -> str:
         """Finish/complete a task (mark as done)."""
@@ -245,39 +519,71 @@ class YarigClient:
 
         if task_index is not None:
             if task_index < 1 or task_index > len(tasks):
-                return f"⚠️ Tarea {task_index} no existe (hay {len(tasks)})"
+                return f"⚠️ La mision {task_index} no existe. Ahora mismo hay {len(tasks)} en la lista."
             task = tasks[task_index - 1]
         else:
             task = self._find_active_task(tasks)
             if not task:
-                return "⚠️ No hay ninguna tarea en curso. Usa /finalizar <n> para indicar cuál"
+                return "⚠️ No hay ninguna mision activa. Usa /finalizar <n> si quieres cerrar una concreta."
 
         tid = task["id"]
         # finished=1 → completar
+        pre_score = await self._get_score_value()
         result = await self._request(CLOSE_TASK_URL, {"tid": tid, "finished": 1})
         if result is not None:
+            post_score = await self._get_score_value()
+            gained_points = post_score - pre_score
+            self.remember_task_completion_points(str(tid), gained_points)
             desc = task.get("description", "").strip()
-            return f"✅ Tarea finalizada: {desc}"
-        return "⚠️ No se pudo finalizar la tarea"
+            return f"☑ Mision completada: {desc} · XP {gained_points:+d}"
+        return "⚠️ No he podido completar la mision."
+
+    async def finalizar_tarea_por_id(self, task_id: str) -> str:
+        data = await self.get_today_data()
+        if not data or not data.get("tasks"):
+            return "⚠️ No hay tareas para hoy"
+
+        task = next((t for t in data["tasks"] if str(t.get("id")) == str(task_id)), None)
+        if not task:
+            return "⚠️ Esa mision ya no aparece en la lista actual."
+
+        pre_score = await self._get_score_value()
+        result = await self._request(CLOSE_TASK_URL, {"tid": task_id, "finished": 1})
+        if result is not None:
+            post_score = await self._get_score_value()
+            gained_points = post_score - pre_score
+            self.remember_task_completion_points(str(task_id), gained_points)
+            desc = task.get("description", "").strip()
+            return f"☑ Mision completada: {desc} · XP {gained_points:+d}"
+        return "⚠️ No he podido completar la mision."
 
     # ── Puntuación ──────────────────────────────────────────
 
     async def get_score(self) -> str:
-        result = await self._request(SCORE_URL)
-        if result is not None:
-            score = int(result) if isinstance(result, (int, str)) else 0
-            emoji = "🏆" if score > 0 else "📉" if score < 0 else "➖"
-            return f"{emoji} Tu puntuación en Yarig: *{score}* puntos"
-        return "⚠️ No se pudo obtener la puntuación"
-
+        score = await self._get_score_value()
+        icon, rank = self._score_rank(score)
+        return (
+            "✦ *Yarig.ai | Puntuacion*\n\n"
+            f"{icon} XP actual: *{score}* puntos\n"
+            f"◆ Rango: *{self._esc(rank)}*"
+        )
     # ── Equipo ──────────────────────────────────────────────
 
-    async def get_team(self) -> str:
-        result = await self._request(USERS_URL, {"term": ""})
-        if not result or not result.get("mates"):
-            return "⚠️ No se pudo obtener el equipo"
+    async def get_team_data(self, refresh: bool = False) -> list[dict]:
+        if not refresh and self._cache_is_fresh(self._team_cache):
+            return self._team_cache.get("items", [])
 
-        mates = result["mates"]
+        result = await self._request(USERS_URL, {"term": ""})
+        mates = result.get("mates", []) if result and result.get("mates") else []
+        if mates:
+            self._team_cache = {"ts": time.time(), "items": mates}
+        return mates
+
+    async def get_team(self) -> str:
+        mates = await self.get_team_data()
+        if not mates:
+            return "⚠️ No he podido cargar el equipo ahora mismo."
+
         lines = [f"👥 *Equipo Yarig.ai* ({len(mates)} miembros)\n"]
         for m in mates:
             name = self._esc(m.get("name", "?"))
@@ -291,12 +597,12 @@ class YarigClient:
         await self._ensure_session()
         if not self._logged_in:
             if not await self.login():
-                return "⚠️ No se pudo conectar con Yarig.ai"
+                return "⚠️ No he podido conectar con Yarig.ai ahora mismo."
 
         try:
             async with self._session.get(f"{YARIG_BASE}/tasks/history") as resp:
                 if resp.status != 200:
-                    return "⚠️ No se pudo obtener el historial"
+                    return "⚠️ No he podido abrir el historial ahora mismo."
                 html = await resp.text()
 
             # Parse table rows
@@ -320,7 +626,7 @@ class YarigClient:
                         tasks_found.append(clean)
 
             if not tasks_found:
-                return "📜 Sin historial de tareas reciente"
+                return "📜 Aun no hay historial reciente para mostrar."
 
             lines = ["📜 *Historial de tareas*\n"]
             for t in tasks_found[:10]:
@@ -330,21 +636,183 @@ class YarigClient:
             return "\n".join(lines)
         except Exception as e:
             logger.warning(f"History error: {e}")
-            return "⚠️ Error al obtener el historial"
+            return "⚠️ Ha fallado la carga del historial."
 
     # ── Pedir tarea a compañero ─────────────────────────────
 
+    async def get_notifications(self) -> str:
+        result = await self._request(NOTIFICATIONS_URL, method="GET")
+        if not result:
+            return "🔔 Sin notificaciones recientes"
+
+        items = []
+        if isinstance(result, dict):
+            for key in ("notifications", "data", "items", "rows"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    items = value
+                    break
+            if not items and all(not isinstance(v, (dict, list)) for v in result.values()):
+                items = [result]
+        elif isinstance(result, list):
+            items = result
+
+        if not items:
+            return "🔔 Sin notificaciones recientes"
+
+        lines = ["🔔 *Notificaciones Yarig*\n"]
+        for item in items[:10]:
+            if isinstance(item, dict):
+                title = self._esc(
+                    str(
+                        item.get("title")
+                        or item.get("notification")
+                        or item.get("text")
+                        or item.get("message")
+                        or item.get("description")
+                        or "Notificación"
+                    ).strip()
+                )
+                subtitle = self._esc(
+                    str(
+                        item.get("datetime")
+                        or item.get("created")
+                        or item.get("date")
+                        or item.get("hour")
+                        or ""
+                    ).strip()
+                )
+                state = item.get("state") or item.get("read")
+                unread = str(state) in ("0", "false", "False", "")
+                prefix = "🆕" if unread else "•"
+                line = f"{prefix} {title}"
+                if subtitle:
+                    line += f" — _{subtitle}_"
+                lines.append(line)
+            else:
+                lines.append(f"• {self._esc(str(item))}")
+        return "\n".join(lines)
+
     async def find_mate(self, name: str) -> dict | None:
+        name_lower = name.lower()
+
+        cached_mates = await self.get_team_data()
+        for mate in cached_mates:
+            if name_lower in mate.get("name", "").lower():
+                return mate
+
         result = await self._request(USERS_URL, {"term": name})
         if not result or not result.get("mates"):
             return None
         mates = result["mates"]
-        # Fuzzy match
-        name_lower = name.lower()
-        for m in mates:
-            if name_lower in m.get("name", "").lower():
-                return m
+        for mate in mates:
+            if name_lower in mate.get("name", "").lower():
+                return mate
         return mates[0] if mates else None
+
+    def _normalize_request_item(self, item: dict) -> dict:
+        request_id = str(
+            item.get("id")
+            or item.get("request_id")
+            or item.get("id_task_request")
+            or item.get("task_request_id")
+            or ""
+        ).strip()
+        sender = (
+            item.get("sender")
+            or item.get("from")
+            or item.get("name")
+            or item.get("user")
+            or item.get("requester")
+            or item.get("mate")
+            or "Compañero"
+        )
+        text_value = (
+            item.get("text")
+            or item.get("description")
+            or item.get("task")
+            or item.get("title")
+            or item.get("message")
+            or item.get("request")
+            or "Petición sin texto"
+        )
+        priority_raw = str(item.get("type") or item.get("priority") or item.get("request_type") or "2")
+        created = str(item.get("datetime") or item.get("created") or item.get("date") or item.get("hour") or "").strip()
+        return {
+            "id": request_id,
+            "sender": str(sender).strip(),
+            "text": str(text_value).strip(),
+            "priority": priority_raw,
+            "created": created,
+            "raw": item,
+        }
+
+    async def get_unread_requests_data(self) -> list[dict]:
+        result = await self._request(UNREAD_REQUESTS_URL)
+        items = []
+        if isinstance(result, list):
+            items = result
+        elif isinstance(result, dict):
+            for key in ("requests", "data", "items", "rows"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    items = value
+                    break
+        normalized = []
+        for item in items:
+            if isinstance(item, dict):
+                normalized.append(self._normalize_request_item(item))
+        return [item for item in normalized if item.get("id")]
+
+    async def get_unread_requests_summary(self) -> str:
+        requests = await self.get_unread_requests_data()
+        if not requests:
+            return "📥 *Peticiones Yarig*\n\nSin peticiones pendientes."
+
+        lines = ["📥 *Peticiones Yarig*\n"]
+        priority_labels = {"1": "◌ Sugerencia", "2": "▣ Peticion", "3": "⚠ Urgencia"}
+        for idx, request in enumerate(requests[:10], 1):
+            sender = self._esc(request["sender"])
+            text_value = self._esc(request["text"])
+            pr = priority_labels.get(str(request["priority"]), "▣ Peticion")
+            line = f"{idx}. {pr} de *{sender}*\n_{text_value}_"
+            if request.get("created"):
+                line += f"\n🕒 {self._esc(request['created'])}"
+            lines.append(line)
+        return "\n\n".join(lines)
+
+    async def mark_request_state(self, request_id: str, state: int) -> str:
+        payloads = [
+            {"id": request_id, "state": state},
+            {"request": request_id, "state": state},
+            {"rid": request_id, "state": state},
+        ]
+        result = None
+        for payload in payloads:
+            result = await self._request(UPDATE_REQUEST_STATE_URL, payload)
+            if result not in (None, False):
+                break
+        if result in (None, False):
+            return "⚠️ No he podido actualizar esa peticion."
+        return "☑ Peticion actualizada"
+
+    async def accept_request(self, request_id: str) -> str:
+        open_payloads = [
+            {"id": request_id},
+            {"request": request_id},
+            {"rid": request_id},
+        ]
+        opened = None
+        for payload in open_payloads:
+            opened = await self._request(OPEN_TASK_FROM_REQUEST_URL, payload)
+            if opened not in (None, False):
+                break
+        state_result = await self.mark_request_state(request_id, 2)
+        if opened not in (None, False):
+            return "☑ Peticion aceptada y convertida en mision"
+        if state_result.startswith("✅"):
+            return "☑ Peticion aceptada"
+        return "⚠️ No he podido aceptar esa peticion."
 
     async def send_request(self, user_id: str, text: str, req_type: int = 2) -> str:
         result = await self._request(ADD_REQUEST_URL, {
@@ -354,26 +822,59 @@ class YarigClient:
         })
         if result:
             types = {1: "Sugerencia", 2: "Petición", 3: "Urgencia"}
-            return f"✅ {types.get(req_type, 'Petición')} enviada"
-        return "⚠️ No se pudo enviar la petición"
+            return f"☑ {types.get(req_type, 'Peticion')} enviada"
+        return "⚠️ No he podido enviar la peticion."
 
     # ── Proyectos ───────────────────────────────────────────
 
-    async def find_project(self, term: str, customer_id: str = "2396") -> dict | None:
-        result = await self._request(PROJECTS_URL, {"term": term, "customer": customer_id})
-        if result and isinstance(result, list) and len(result) > 0:
-            return result[0]
-        return None
+    async def search_projects(
+        self,
+        term: str = "",
+        customer_id: str = "2396",
+        refresh: bool = False,
+        limit: int | None = None,
+    ) -> list[dict]:
+        cache_key = f"{customer_id}:{term.strip().lower() or '*'}"
+        cached = self._projects_cache.get(cache_key)
+        if not refresh and self._cache_is_fresh(cached):
+            projects = cached.get("items", [])
+            return projects[:limit] if limit is not None else projects
 
-    async def list_projects(self, customer_id: str = "2396") -> str:
-        result = await self._request(PROJECTS_URL, {"term": "", "customer": customer_id})
-        if not result or not isinstance(result, list):
+        result = await self._request(PROJECTS_URL, {"term": term, "customer": customer_id})
+        projects = result if isinstance(result, list) else []
+        if projects:
+            self._projects_cache[cache_key] = {"ts": time.time(), "items": projects}
+        return projects[:limit] if limit is not None else projects
+
+    async def find_project(self, term: str, customer_id: str = "2396") -> dict | None:
+        term_lower = term.lower()
+        direct_matches = await self.search_projects(term=term, customer_id=customer_id)
+        for project in direct_matches:
+            label = (project.get("label") or project.get("value") or "").lower()
+            if term_lower in label:
+                return project
+
+        cached_projects = await self.search_projects(term="", customer_id=customer_id)
+        for project in cached_projects:
+            label = (project.get("label") or project.get("value") or "").lower()
+            if term_lower in label:
+                return project
+
+        return direct_matches[0] if direct_matches else None
+
+    async def list_projects(self, term: str = "", customer_id: str = "2396") -> str:
+        projects = await self.search_projects(term=term, customer_id=customer_id)
+        if not projects:
             return "⚠️ No se encontraron proyectos"
 
-        lines = ["📁 *Proyectos*\n"]
-        for p in result[:15]:
-            name = self._esc(p.get("label", p.get("value", "?")))
-            pid = p.get("id", "?")
+        header = "📁 *Proyectos*\n"
+        if term:
+            header = f"📁 *Proyectos* — filtro: _{self._esc(term)}_\n"
+
+        lines = [header]
+        for project in projects[:15]:
+            name = self._esc(project.get("label", project.get("value", "?")))
+            pid = project.get("id", "?")
             lines.append(f"• {name} (id: {pid})")
         return "\n".join(lines)
 

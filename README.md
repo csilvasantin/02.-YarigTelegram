@@ -1,32 +1,17 @@
 # Yarig.Telegram
 
-Control completo de [Yarig.ai](https://yarig.ai) desde Telegram con panel interactivo de tareas.
+Control completo de [Yarig.ai](https://yarig.ai) desde Telegram con panel interactivo de tareas, resumenes automaticos y arranque diario de mision.
 
 ## Que hace
 
-Replica toda la funcionalidad de Yarig.ai en un bot de Telegram con botones inline que emulan la interfaz web:
+Replica la operativa diaria de Yarig.ai dentro de Telegram para que el equipo pueda trabajar sin entrar en la web:
 
-```
-📋 Tareas del día (Yarig.ai)
-
-1. ▶️ Agente para Yarig.ai Memorizer — Admira
-2. ⏳ Inbox 01 — Admira
-
-┌──────────────────────────────────────┐
-│ ▶️ 1. Agente para Yari...   ⏸   ✅  │
-│ ⏳ 2. Inbox 01               ▶️      │
-│            🔄 Actualizar             │
-└──────────────────────────────────────┘
-```
-
-## Ciclo de vida de tarea
-
-```
-⏳ Pendiente  →  /iniciar   →  ▶️ En curso
-▶️ En curso   →  /pausar    →  ⏸ Pausada
-▶️ En curso   →  /finalizar →  ✅ Completada
-⏸ Pausada    →  /iniciar   →  🔄 Reanudada
-```
+- panel inline para iniciar, pausar y completar misiones
+- creacion de tareas con selector de proyecto
+- estado de jornada, score, equipo, historial y notificaciones
+- bandeja de peticiones recibidas
+- resumen diario automatico en Telegram
+- mision de arranque automatica a las 08:00
 
 ## Comandos
 
@@ -34,10 +19,14 @@ Replica toda la funcionalidad de Yarig.ai en un bot de Telegram con botones inli
 | Comando | Descripcion |
 |---------|-------------|
 | `/yarig` | Panel de tareas con controles inline |
-| `/tarea <desc>` | Añadir nueva tarea |
+| `/tarea <desc>` | Añadir tarea con selector de proyecto |
 | `/iniciar [n]` | Iniciar o reanudar tarea |
 | `/pausar` | Pausar tarea activa |
 | `/finalizar [n]` | Completar tarea |
+| `/random [proyecto]` | Crear una mision sugerida por el bot |
+| `/mision_dia` | Crear manualmente la mision de arranque del dia |
+
+Formato directo recomendado: `/tarea Proyecto :: Descripcion`
 
 ### Jornada
 | Comando | Descripcion |
@@ -46,17 +35,42 @@ Replica toda la funcionalidad de Yarig.ai en un bot de Telegram con botones inli
 | `/fichar salida` | Fichar salida |
 | `/extras` | Iniciar horas extras |
 | `/extras fin` | Finalizar horas extras |
+| `/estado` | Estado actual: jornada, tarea activa y puntuacion |
+| `/score` | Tu puntuacion |
 
-### Equipo
+### Equipo y contexto
 | Comando | Descripcion |
 |---------|-------------|
-| `/score` | Tu puntuacion |
 | `/equipo` | Miembros del equipo |
 | `/pedir <nombre> <tarea>` | Enviar peticion a compañero |
-| `/proyectos` | Lista de proyectos |
+| `/peticiones` | Ver y gestionar peticiones recibidas |
+| `/proyectos [texto]` | Lista o busca proyectos |
 | `/historial` | Historial de tareas |
+| `/notificaciones` | Avisos recientes de Yarig |
+| `/resumen_diario` | Forzar el resumen diario en el chat |
+| `/chatid` | Mostrar el id del chat actual |
+| `/help` | Ayuda del bot |
 
-## Setup
+## Automatizaciones diarias
+
+El bot queda preparado para manana con dos rutinas fijas en horario de Madrid:
+
+- `08:00` crea o verifica la primera mision del dia con este formato: `Hoy es domingo 5 de abril de 2026`
+- `09:00` envia al grupo el resumen diario de Yarig con sesion, mision activa, XP, peticiones y notificaciones
+
+La mision de las 08:00 evita duplicados: si ya existe para ese dia, no la vuelve a crear.
+
+## Servicio persistente en macOS
+
+```bash
+/Users/Carlos/Documents/Codex/Yarig.Telegram/manage_launchd.sh status
+/Users/Carlos/Documents/Codex/Yarig.Telegram/manage_launchd.sh restart
+/Users/Carlos/Documents/Codex/Yarig.Telegram/manage_launchd.sh logs
+```
+
+Servicio usado: `com.csilvasantin.yarigtelegram`
+
+## Setup local
 
 ```bash
 cp .env.example .env

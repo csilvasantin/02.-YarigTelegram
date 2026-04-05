@@ -5,6 +5,7 @@ load_dotenv(override=True)
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_DAILY_CHAT_ID = os.getenv("TELEGRAM_DAILY_CHAT_ID", "-1003888857341")
 
 # Yarig.ai
 YARIG_EMAIL = os.getenv("YARIG_EMAIL", "")
