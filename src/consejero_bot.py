@@ -1,4 +1,8 @@
-"""Bot individual de consejero — cada silla del consejo es un bot de Telegram."""
+"""Bot individual de consejero — cada silla del consejo es un bot de Telegram.
+
+En privado: responde a todo.
+En grupo: responde a /consejo, /operativo, /creativo, /pareja, y menciones directas.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +31,14 @@ from src.actas import save_acta, get_context_for_llm
 
 logger = logging.getLogger(__name__)
 
+# Mapeo de parejas coetaneas
+PAIRS = {
+    "CEO": "CSO", "CSO": "CEO",
+    "CFO": "CDO", "CDO": "CFO",
+    "COO": "CXO", "CXO": "COO",
+    "CTO": "CCO", "CCO": "CTO",
+}
+
 
 # ── Perfil del consejero ───────────────────────────────────
 
@@ -41,6 +53,11 @@ def _esc(text: str) -> str:
     for ch in ("_", "*", "`", "["):
         text = text.replace(ch, f"\\{ch}")
     return text
+
+
+def _is_group(update: Update) -> bool:
+    """True si el mensaje viene de un grupo o supergrupo."""
+    return update.effective_chat.type in ("group", "supergroup")
 
 
 # ── Generacion de respuesta ────────────────────────────────
@@ -110,11 +127,44 @@ async def _generate_llm(profile: dict, task: str) -> str:
         return _generate_template(profile, task)
 
 
+async def _respond(profile: dict, update: Update, task: str, target: str):
+    """Genera respuesta, guarda acta, y envia."""
+    await update.message.reply_text(
+        f"{profile['emoji']} Procesando como {profile['role']}..."
+    )
+
+    response = await _generate_response(profile, task)
+
+    save_acta(
+        target=target,
+        task=task,
+        responses=[{
+            "role": profile["role"],
+            "name": profile["name"],
+            "side": profile["side"],
+            "emoji": profile["emoji"],
+            "response": response,
+        }],
+        llm_mode=CONSEJO_USE_LLM and bool(CONSEJO_LLM_API_KEY),
+    )
+
+    formatted = (
+        f"{profile['emoji']} *{profile['role']} — {_esc(profile['name'])}*\n"
+        f"_{_esc(profile['title_es'])} | Leyenda: {_esc(profile['legend'])}_\n\n"
+        f"{_esc(response)}"
+    )
+    await update.message.reply_text(formatted, parse_mode="Markdown")
+
+
 # ── Handlers ───────────────────────────────────────────────
 
 
 def make_handlers(profile: dict):
     """Crea los handlers para un bot de consejero."""
+
+    my_side = profile["side"]  # "operativo" o "creativo"
+    my_role = profile["role"]  # "CEO", "CFO", etc.
+    my_pair = profile.get("pair", "")  # "CSO", etc.
 
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome = profile.get("welcome", f"Soy {profile['name']}, {profile['title_es']}.")
@@ -139,43 +189,89 @@ def make_handlers(profile: dict):
         )
         await update.message.reply_text(text, parse_mode="Markdown")
 
+    # ── Comandos de grupo: /consejo, /operativo, /creativo, /pareja ──
+
+    async def cmd_consejo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Todos los consejeros responden."""
+        task = " ".join(context.args) if context.args else ""
+        if not task:
+            await update.message.reply_text(
+                f"Uso: /consejo <tarea>\nEjemplo: /consejo Deberiamos expandir a Portugal?"
+            )
+            return
+        await _respond(profile, update, task, "consejo")
+
+    async def cmd_operativo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Solo el lado operativo responde."""
+        if my_side != "operativo":
+            return  # Silencio — no soy del lado operativo
+        task = " ".join(context.args) if context.args else ""
+        if not task:
+            await update.message.reply_text(
+                f"Uso: /operativo <tarea>\nEjemplo: /operativo Revisar presupuesto Q2"
+            )
+            return
+        await _respond(profile, update, task, "operativo")
+
+    async def cmd_creativo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Solo el lado creativo responde."""
+        if my_side != "creativo":
+            return  # Silencio — no soy del lado creativo
+        task = " ".join(context.args) if context.args else ""
+        if not task:
+            await update.message.reply_text(
+                f"Uso: /creativo <tarea>\nEjemplo: /creativo Redisenar la landing page"
+            )
+            return
+        await _respond(profile, update, task, "creativo")
+
+    async def cmd_pareja(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Responde si este bot es parte de la pareja mencionada."""
+        if not context.args:
+            await update.message.reply_text(
+                f"Uso: /pareja <ROL> <tarea>\nEjemplo: /pareja CEO Lanzar nuevo producto"
+            )
+            return
+        target_role = context.args[0].upper()
+        task = " ".join(context.args[1:]) if len(context.args) > 1 else ""
+        if not task:
+            await update.message.reply_text("Falta la tarea. Uso: /pareja CEO <tarea>")
+            return
+        # Respondo si soy el rol mencionado o su pareja
+        pair_of_target = PAIRS.get(target_role, "")
+        if my_role != target_role and my_role != pair_of_target:
+            return  # No soy parte de esta pareja
+        await _respond(profile, update, task, f"pareja:{target_role}")
+
+    # ── Mensajes libres (privado: siempre; grupo: solo si me mencionan) ──
+
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Responde a cualquier mensaje como este consejero."""
+        """En privado responde siempre. En grupo solo si mencionan al bot."""
         task = update.message.text.strip()
         if not task:
             return
 
-        await update.message.reply_text(
-            f"{profile['emoji']} Procesando como {profile['role']}..."
-        )
+        if _is_group(update):
+            # En grupo: solo responder si me mencionan por username
+            bot_username = context.bot.username
+            if bot_username and f"@{bot_username}" in task:
+                # Quitar la mencion del texto
+                clean_task = task.replace(f"@{bot_username}", "").strip()
+                if clean_task:
+                    await _respond(profile, update, clean_task, my_role)
+            return
 
-        response = await _generate_response(profile, task)
-
-        # Guardar acta
-        save_acta(
-            target=profile["role"],
-            task=task,
-            responses=[{
-                "role": profile["role"],
-                "name": profile["name"],
-                "side": profile["side"],
-                "emoji": profile["emoji"],
-                "response": response,
-            }],
-            llm_mode=CONSEJO_USE_LLM and bool(CONSEJO_LLM_API_KEY),
-        )
-
-        formatted = (
-            f"{profile['emoji']} *{profile['role']} — {_esc(profile['name'])}*\n"
-            f"_{_esc(profile['title_es'])} | Leyenda: {_esc(profile['legend'])}_\n\n"
-            f"{_esc(response)}"
-        )
-        await update.message.reply_text(formatted, parse_mode="Markdown")
+        # En privado: responder siempre
+        await _respond(profile, update, task, my_role)
 
     return [
         CommandHandler("start", cmd_start),
         CommandHandler("help", cmd_start),
         CommandHandler("perfil", cmd_perfil),
+        CommandHandler("consejo", cmd_consejo),
+        CommandHandler("operativo", cmd_operativo),
+        CommandHandler("creativo", cmd_creativo),
+        CommandHandler("pareja", cmd_pareja),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
     ]
 

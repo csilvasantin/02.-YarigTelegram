@@ -86,13 +86,24 @@ async def run_all():
 
     logger.info(f"Arrancando {len(apps)} bots de consejeros...")
 
-    # Inicializar todos
+    # Inicializar todos — tolerante a tokens invalidos
+    running: list[Application] = []
     for app in apps:
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling(allowed_updates=["message", "callback_query"])
+        try:
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling(allowed_updates=["message", "callback_query"])
+            running.append(app)
+            logger.info(f"  -> {app.bot.first_name} (@{app.bot.username}) en linea")
+        except Exception as e:
+            logger.warning(f"  -> Fallo al arrancar un bot: {e}")
 
-    logger.info(f"Todos los consejeros en linea ({len(apps)}/{len(profiles)})")
+    if not running:
+        logger.error("Ningun bot pudo arrancar. Revisa los tokens.")
+        sys.exit(1)
+
+    apps = running
+    logger.info(f"Consejeros en linea: {len(apps)}/{len(profiles)}")
 
     # Esperar hasta señal de parada
     stop_event = asyncio.Event()
