@@ -1,4 +1,4 @@
-# CODEX — Yarig.Telegram
+# Proyecto 09 — Yarig.Telegram
 
 ## Estado (2026-04-05): CONSEJO + YARIG OPERATIVO Y PROGRAMADO PARA MANANA
 
