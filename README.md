@@ -7,6 +7,7 @@ Control completo de [Yarig.ai](https://yarig.ai) desde Telegram con panel intera
 Replica la operativa diaria de Yarig.ai dentro de Telegram para que el equipo pueda trabajar sin entrar en la web:
 
 - panel inline para iniciar, pausar y completar misiones
+- accesos rapidos inline a peticiones, avisos, estado, resumen, onboarding y offboarding
 - creacion de tareas con selector de proyecto
 - estado de jornada, score, equipo, historial y notificaciones
 - bandeja de peticiones recibidas
@@ -26,6 +27,8 @@ Replica la operativa diaria de Yarig.ai dentro de Telegram para que el equipo pu
 | `/finalizar [n]` | Completar tarea |
 | `/random [proyecto]` | Crear una mision sugerida por el bot |
 | `/mision_dia` | Crear manualmente la mision de arranque del dia |
+| `/onboarding` | Ejecutar manualmente la rutina de arranque del dia |
+| `/offboarding` | Ejecutar manualmente la rutina de cierre del dia |
 
 Formato directo recomendado: `/tarea Proyecto :: Descripcion`
 

@@ -7,6 +7,7 @@ Integrado en Memorizer bot (csilvasantin/Memorizer).
 
 ## Que queda vivo en el repo
 - panel Yarig con botones inline por `task id`
+- accesos rapidos inline desde `/yarig` a peticiones, avisos, estado, resumen, onboarding y offboarding
 - Consejo de Administracion con dispatch a las 8 sillas
 - actas locales del consejo
 - arranque persistente por `launchd`
@@ -18,6 +19,8 @@ Integrado en Memorizer bot (csilvasantin/Memorizer).
 - `/estado`, `/score`, `/equipo`, `/pedir`, `/peticiones`, `/proyectos`, `/historial`, `/notificaciones`
 - `/random` — crea una mision sugerida y la documenta en Yarig.ai
 - `/mision_dia` — fuerza la creacion de la mision de arranque del dia
+- `/onboarding` — ejecuta manualmente la rutina de arranque del dia
+- `/offboarding` — ejecuta manualmente la rutina de cierre del dia
 - `/resumen_diario` — fuerza el resumen diario en el chat
 - `/chatid` — muestra el id del chat actual
 

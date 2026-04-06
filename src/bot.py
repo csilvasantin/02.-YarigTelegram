@@ -87,6 +87,8 @@ HELP_TEXT = (
     "/notificaciones — Avisos recientes de Yarig\n"
     "/random — Crear una mision sugerida por el bot\n"
     "/mision_dia — Crear la mision de arranque manualmente\n"
+    "/onboarding — Lanzar el arranque del dia\n"
+    "/offboarding — Lanzar el cierre del dia\n"
     "/chatid — Mostrar id del chat actual\n\n"
     "/help — Esta ayuda"
 )
@@ -213,6 +215,18 @@ def _build_task_keyboard(tasks: list[dict]) -> InlineKeyboardMarkup:
     rows.append([
         InlineKeyboardButton("↻ Actualizar", callback_data="yt_refresh"),
         InlineKeyboardButton("⌘ Ayuda", callback_data="yt_help"),
+    ])
+    rows.append([
+        InlineKeyboardButton("📥 Peticiones", callback_data="yt_requests"),
+        InlineKeyboardButton("🔔 Avisos", callback_data="yt_notifications"),
+    ])
+    rows.append([
+        InlineKeyboardButton("◔ Estado", callback_data="yt_status"),
+        InlineKeyboardButton("✦ Resumen", callback_data="yt_digest"),
+    ])
+    rows.append([
+        InlineKeyboardButton("☀️ Onboarding", callback_data="yt_onboarding"),
+        InlineKeyboardButton("🌙 Offboarding", callback_data="yt_offboarding"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -412,6 +426,63 @@ async def handle_yarig_control(update: Update, context: ContextTypes.DEFAULT_TYP
     if action == "yt_help":
         await query.answer("Mostrando ayuda...")
         await query.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+        return
+
+    if action == "yt_requests":
+        await query.answer("Abriendo peticiones...")
+        await _send_requests_panel(query.message)
+        return
+
+    if action == "yt_notifications":
+        await query.answer("Cargando avisos...")
+        notifications = await yarig.get_notifications()
+        await query.message.reply_text(notifications, parse_mode="Markdown")
+        return
+
+    if action == "yt_status":
+        await query.answer("Cargando estado...")
+        status = await yarig.get_status_summary()
+        await query.message.reply_text(status, parse_mode="Markdown")
+        return
+
+    if action == "yt_digest":
+        await query.answer("Preparando resumen...")
+        digest = await _build_daily_digest()
+        await query.message.reply_text(digest, parse_mode="Markdown")
+        return
+
+    if action == "yt_onboarding":
+        await query.answer("Ejecutando onboarding...")
+        created, task_text = await yarig.ensure_daily_opening_task()
+        await yarig.close()
+        headline = "✦ *Onboarding ejecutado*"
+        if created:
+            body = f"→ _{yarig._esc(task_text)}_\nNueva mision de arranque creada."
+        else:
+            body = f"→ _{yarig._esc(task_text)}_\nLa mision de arranque ya estaba preparada para hoy."
+        await query.message.reply_text(f"{headline}\n{body}", parse_mode="Markdown")
+        return
+
+    if action == "yt_offboarding":
+        await query.answer("Ejecutando offboarding...")
+        created, task = await yarig.ensure_task_for_today("Inbox 0")
+        if task and task.get("id"):
+            start_result = await yarig.start_task_if_needed(str(task.get("id")))
+        else:
+            start_result = "⚠️ No he podido arrancar Inbox 0 porque no he encontrado la tarea tras crearla."
+        finish_result = await yarig.close_task_by_description("Inbox 0")
+        close_result = await yarig.fichar_salida("Inbox 0")
+        await yarig.close()
+        created_line = "Nueva mision preparada." if created else "Inbox 0 ya existia para hoy."
+        text = (
+            "✦ *Offboarding ejecutado*\n"
+            "→ _Inbox 0_\n"
+            f"{created_line}\n"
+            f"→ {yarig._esc(start_result)}\n"
+            f"→ {yarig._esc(finish_result)}\n"
+            f"→ {yarig._esc(close_result)}"
+        )
+        await query.message.reply_text(text, parse_mode="Markdown")
         return
 
     if action.startswith("yt_pause_"):
@@ -804,6 +875,40 @@ async def cmd_mision_dia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def cmd_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Run the morning onboarding flow manually."""
+    created, task_text = await yarig.ensure_daily_opening_task()
+    await yarig.close()
+    headline = "✦ *Onboarding ejecutado*"
+    if created:
+        body = f"→ _{yarig._esc(task_text)}_\nNueva mision de arranque creada."
+    else:
+        body = f"→ _{yarig._esc(task_text)}_\nLa mision de arranque ya estaba preparada para hoy."
+    await update.message.reply_text(f"{headline}\n{body}", parse_mode="Markdown")
+
+
+async def cmd_offboarding(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Run the evening offboarding flow manually."""
+    created, task = await yarig.ensure_task_for_today("Inbox 0")
+    if task and task.get("id"):
+        start_result = await yarig.start_task_if_needed(str(task.get("id")))
+    else:
+        start_result = "⚠️ No he podido arrancar Inbox 0 porque no he encontrado la tarea tras crearla."
+    finish_result = await yarig.close_task_by_description("Inbox 0")
+    close_result = await yarig.fichar_salida("Inbox 0")
+    await yarig.close()
+    created_line = "Nueva mision preparada." if created else "Inbox 0 ya existia para hoy."
+    text = (
+        "✦ *Offboarding ejecutado*\n"
+        "→ _Inbox 0_\n"
+        f"{created_line}\n"
+        f"→ {yarig._esc(start_result)}\n"
+        f"→ {yarig._esc(finish_result)}\n"
+        f"→ {yarig._esc(close_result)}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def cmd_resumen_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send the daily digest on demand."""
     digest = await _build_daily_digest()
@@ -996,6 +1101,8 @@ def main():
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("resumen_diario", cmd_resumen_diario))
     app.add_handler(CommandHandler("mision_dia", cmd_mision_dia))
+    app.add_handler(CommandHandler("onboarding", cmd_onboarding))
+    app.add_handler(CommandHandler("offboarding", cmd_offboarding))
 
     # Consejo de Administracion
     app.add_handler(CommandHandler("consejo", cmd_consejo))
