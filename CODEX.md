@@ -1,9 +1,9 @@
 # Proyecto 09 — Yarig.Telegram
 
-## Estado (2026-04-07): BOT PROPIO @YarigAiBot OPERATIVO EN WINDOWS
+## Estado (2026-04-08): BOT PROPIO @YarimTelegramBot OPERATIVO EN MAC MINI
 
 Control de Yarig.ai desde Telegram + Consejo de Administracion con 8 sillas IA.
-Bot propio: **@YarigAiBot** (token independiente, sin conflicto 409 con Memorizer).
+Bot propio: **@YarimTelegramBot** (token independiente, sin conflicto 409 con Memorizer).
 
 ## Que queda vivo en el repo
 - panel Yarig con botones inline por `task id`
@@ -60,7 +60,7 @@ Bot propio: **@YarigAiBot** (token independiente, sin conflicto 409 con Memorize
 ## Config relevante
 - `.env`: `TELEGRAM_BOT_TOKEN`, `YARIG_EMAIL`, `YARIG_PASSWORD`
 - `src/config.py`: `TELEGRAM_DAILY_CHAT_ID` y variables del consejo
-- Bot Telegram: **@YarigAiBot** (token propio)
+- Bot Telegram: **@YarimTelegramBot** (token propio)
 
 ## API endpoints descubiertos (2026-04-07)
 - `productivity/json_get_team_by_order_or_rank` — ranking del equipo (params: column, order, rank, range)
@@ -74,7 +74,7 @@ Bot propio: **@YarigAiBot** (token independiente, sin conflicto 409 con Memorize
 9. **Consejeros 7/8**: CCO y CXO ahora arrancan (antes fallaban); solo CTO falla por red transitoria
 
 ## Cambios sesion 2026-04-07
-1. **Bot propio creado**: @YarigAiBot con token independiente — resuelve conflicto 409 con Memorizer
+1. **Bot propio creado**: @YarimTelegramBot (antes @YarigAiBot) con token independiente — resuelve conflicto 409 con Memorizer
 2. **Fix Windows**: `asyncio.WindowsSelectorEventLoopPolicy()` para evitar `ConnectError` en `start_tls`
 3. **`/ranking`**: nuevo comando — ranking de productividad del equipo con XP, tareas, medallas y estado
 4. **`/dedicacion`**: nuevo comando — dedicacion del equipo hoy con fichajes, misiones activas y completadas
@@ -85,7 +85,7 @@ Bot propio: **@YarigAiBot** (token independiente, sin conflicto 409 con Memorize
    - `_format_elapsed_compact` usa `datetime.now(UTC)` para calculos correctos
 
 ## Incidencias resueltas
-- ~~Conflicto 409 Memorizer/Yarig.Telegram~~ → bot propio @YarigAiBot
+- ~~Conflicto 409 Memorizer/Yarig.Telegram~~ → bot propio @YarimTelegramBot
 - ~~Horas 2h atrasadas~~ → conversion UTC a Europe/Madrid
 - ~~ConnectError en Windows~~ → WindowsSelectorEventLoopPolicy
 
