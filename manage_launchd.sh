@@ -2,8 +2,8 @@
 set -euo pipefail
 LABEL=com.csilvasantin.yarigtelegram
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-ERR_LOG="/Users/Carlos/Documents/Codex/Yarig.Telegram/logs/launchd.err.log"
-OUT_LOG="/Users/Carlos/Documents/Codex/Yarig.Telegram/logs/launchd.out.log"
+ERR_LOG="/tmp/yarigtelegram-launchd.err.log"
+OUT_LOG="/tmp/yarigtelegram-launchd.out.log"
 
 case "${1:-status}" in
   start)
