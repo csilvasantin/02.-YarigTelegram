@@ -1,5 +1,7 @@
 # Yarig.Telegram
 
+Version actual: `v.2026.13.04.1`
+
 Control completo de [Yarig.ai](https://yarig.ai) desde Telegram con panel interactivo de tareas, resumenes automaticos y arranque diario de mision.
 
 ## Que hace

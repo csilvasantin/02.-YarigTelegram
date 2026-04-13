@@ -57,6 +57,7 @@ PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
+APP_VERSION = "v.2026.13.04.1"
 
 
 class YarigSessionRouter:
@@ -96,6 +97,7 @@ RANDOM_TASK_TEMPLATES = [
 
 HELP_TEXT = (
     "✦ Yarig.Telegram\n"
+    f"{APP_VERSION}\n"
     "Control de Yarig.ai desde Telegram\n\n"
     "*Cuenta*\n"
     "/login — Conectar tu usuario de Yarig.ai\n"
