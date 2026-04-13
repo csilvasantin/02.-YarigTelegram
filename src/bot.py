@@ -13,6 +13,7 @@ from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -58,7 +59,7 @@ PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
-APP_VERSION = "v.2026.13.04.6"
+APP_VERSION = "v.2026.13.04.7"
 
 
 class YarigSessionRouter:
@@ -190,6 +191,21 @@ async def _reply_yarig_login_required(update: Update) -> None:
         return
     if update.effective_message:
         await update.effective_message.reply_text(text, parse_mode=None)
+
+
+async def _reply_chunks(message, text: str, parse_mode=None, **kwargs) -> None:
+    """Send Telegram text safely, falling back to plain text if formatting breaks."""
+    chunk_size = 3800
+    chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
+    for index, chunk in enumerate(chunks):
+        extra = kwargs if index == 0 else {}
+        try:
+            await message.reply_text(chunk, parse_mode=parse_mode, **extra)
+        except BadRequest as exc:
+            if parse_mode is None:
+                raise
+            logger.warning("Telegram parse_mode fallback to plain text: %s", exc)
+            await message.reply_text(chunk, parse_mode=None, **extra)
 
 
 def _with_yarig_account(handler):
@@ -1264,7 +1280,7 @@ async def cmd_consulta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results, acta_num = await dispatch_task(members, task, target)
     messages = assemble_full_response(target, task, results)
     for msg in messages:
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await _reply_chunks(update.message, msg, parse_mode="Markdown")
 
     chat_id = update.message.chat_id
     roles = [m.role for m in members]
@@ -1380,7 +1396,7 @@ async def process_consejo_task(update: Update, context: ContextTypes.DEFAULT_TYP
     results, acta_num = await dispatch_task(members, task, target)
     messages = assemble_full_response(target, task, results)
     for msg in messages:
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await _reply_chunks(update.message, msg, parse_mode="Markdown")
 
     chat_id = update.message.chat_id
     roles = [m.role for m in members]
@@ -1423,12 +1439,12 @@ async def cmd_acta(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = format_acta_detail(acta)
     if len(text) <= 3800:
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await _reply_chunks(update.message, text, parse_mode="Markdown")
     else:
         parts = text.split("\n" + "─" * 30)
         for part in parts:
             if part.strip():
-                await update.message.reply_text(part.strip(), parse_mode="Markdown")
+                await _reply_chunks(update.message, part.strip(), parse_mode="Markdown")
 
 
 async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

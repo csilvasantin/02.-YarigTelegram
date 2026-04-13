@@ -45,20 +45,19 @@ async def get_bot_info(token: str) -> dict | None:
     return None
 
 
-async def send_message_as_bot(token: str, chat_id: int, text: str, parse_mode: str = "Markdown") -> bool:
+async def send_message_as_bot(token: str, chat_id: int, text: str, parse_mode: str | None = None) -> bool:
     """Envia un mensaje como un bot individual a un chat."""
     if not token:
         return False
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{TELEGRAM_API}/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": parse_mode,
-                },
-            ) as resp:
+            payload = {
+                "chat_id": chat_id,
+                "text": text[:3800],
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            async with session.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=payload) as resp:
                 if resp.status == 200:
                     return True
                 body = await resp.text()
