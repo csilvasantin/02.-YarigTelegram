@@ -25,7 +25,13 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
-from src.config import CONSEJO_GAME_API_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_DAILY_CHAT_ID
+from src.config import (
+    CONSEJO_GAME_API_URL,
+    CONSEJO_WEB_LLM_API_URL,
+    CONSEJO_WEB_LLM_TOKEN,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_DAILY_CHAT_ID,
+)
 from src.yarig import YarigClient
 from src.consejo import (
     build_board_table,
@@ -59,7 +65,7 @@ PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
-APP_VERSION = "v.2026.13.04.7"
+APP_VERSION = "v.2026.13.04.8"
 
 
 class YarigSessionRouter:
@@ -147,7 +153,9 @@ HELP_TEXT = (
     "Consejo AdmiraNext\n"
     "/consejoweb texto — Enviar mision a la web del Consejo\n"
     "/consejoweb codex :: texto — Enviar solo a Codex\n"
-    "/consejoweb claude :: texto — Enviar solo a Claude\n\n"
+    "/consejoweb claude :: texto — Enviar solo a Claude\n"
+    "/consejoia texto — Preguntar al LLM gratuito del Consejo\n"
+    "/consejoia coetaneos :: texto — Preguntar al Consejo coetaneo\n\n"
     "Contexto\n"
     "/proyectos — Lista o busca proyectos\n"
     "/proyecto — Ficha movil de proyecto\n"
@@ -254,6 +262,18 @@ def _parse_council_web_prompt(raw: str) -> tuple[str, str]:
     return target, prompt
 
 
+def _parse_council_llm_prompt(raw: str) -> tuple[str, str]:
+    generation = "leyendas"
+    prompt = raw.strip()
+    if "::" in prompt:
+        maybe_generation, maybe_prompt = [part.strip() for part in prompt.split("::", 1)]
+        normalized = maybe_generation.lower()
+        if normalized in {"leyendas", "coetaneos"} and maybe_prompt:
+            generation = normalized
+            prompt = maybe_prompt
+    return generation, prompt
+
+
 async def send_council_web_mission(prompt: str, target: str = "all") -> dict:
     api_base = CONSEJO_GAME_API_URL.rstrip("/")
     timeout = aiohttp.ClientTimeout(total=20)
@@ -266,6 +286,42 @@ async def send_council_web_mission(prompt: str, target: str = "all") -> dict:
             if response.status >= 400:
                 return {"ok": False, "status": response.status, "error": data.get("error") or data}
             return data
+
+
+async def ask_council_web_llm(prompt: str, generation: str = "leyendas") -> dict:
+    api_base = CONSEJO_WEB_LLM_API_URL.rstrip("/")
+    timeout = aiohttp.ClientTimeout(total=160)
+    headers = {"Content-Type": "application/json"}
+    if CONSEJO_WEB_LLM_TOKEN:
+        headers["X-Council-Token"] = CONSEJO_WEB_LLM_TOKEN
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            f"{api_base}/api/council/ask",
+            headers=headers,
+            json={"message": prompt, "generation": generation, "context": []},
+        ) as response:
+            data = await response.json(content_type=None)
+            if response.status >= 400:
+                return {"ok": False, "status": response.status, "error": data.get("detail") or data}
+            return {"ok": True, **data}
+
+
+def _format_council_llm_response(prompt: str, generation: str, result: dict) -> str:
+    lines = [
+        "Consejo AdmiraNext IA",
+        f"Generacion: {generation}",
+        f"Pregunta: {prompt}",
+        "",
+        "Racional",
+    ]
+    for reply in result.get("racional") or []:
+        name = reply.get("name") or reply.get("role") or "Consejero"
+        lines.append(f"- {reply.get('icon', '')} {name}: {reply.get('content', '')}")
+    lines.extend(["", "Creativo"])
+    for reply in result.get("creativo") or []:
+        name = reply.get("name") or reply.get("role") or "Consejero"
+        lines.append(f"- {reply.get('icon', '')} {name}: {reply.get('content', '')}")
+    return "\n".join(lines)
 
 # Conversation state for interactive consejo flow
 CONSEJO_AWAITING_TASK = 0
@@ -1355,6 +1411,49 @@ async def cmd_consejo_web(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode=None)
 
 
+async def cmd_consejo_ia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ask the SCUMM Council LLM API and return the answer in Telegram."""
+    raw = " ".join(context.args).strip() if context.args else ""
+    if not raw:
+        await update.message.reply_text(
+            "Uso: /consejoia <pregunta>\n"
+            "Ejemplo: /consejoia Cual debe ser la prioridad comercial de manana?\n"
+            "Ejemplo: /consejoia coetaneos :: Como modernizamos Yarig.ai?",
+            parse_mode=None,
+        )
+        return
+
+    generation, prompt = _parse_council_llm_prompt(raw)
+    if not prompt:
+        await update.message.reply_text("La pregunta no puede estar vacia.", parse_mode=None)
+        return
+
+    await update.message.reply_text(
+        f"Preguntando al Consejo AdmiraNext IA ({generation})...",
+        parse_mode=None,
+    )
+    try:
+        result = await ask_council_web_llm(prompt, generation)
+    except Exception as exc:
+        await update.message.reply_text(
+            "No he podido conectar con el LLM del Consejo AdmiraNext.\n\n"
+            f"Comprueba que este activo en {CONSEJO_WEB_LLM_API_URL}.\n"
+            f"Detalle: {exc}",
+            parse_mode=None,
+        )
+        return
+
+    if not result.get("ok"):
+        await update.message.reply_text(
+            "El LLM del Consejo ha rechazado la consulta.\n\n"
+            f"Detalle: {result.get('error') or result}",
+            parse_mode=None,
+        )
+        return
+
+    await _reply_chunks(update.message, _format_council_llm_response(prompt, generation, result), parse_mode=None)
+
+
 async def consejo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle inline button press from /consejo — select target, then ask for task."""
     query = update.callback_query
@@ -1528,6 +1627,9 @@ def main():
     app.add_handler(CommandHandler("consejoweb", _with_user_session(cmd_consejo_web)))
     app.add_handler(CommandHandler("consejo_web", _with_user_session(cmd_consejo_web)))
     app.add_handler(CommandHandler("admiranext", _with_user_session(cmd_consejo_web)))
+    app.add_handler(CommandHandler("consejoia", _with_user_session(cmd_consejo_ia)))
+    app.add_handler(CommandHandler("consejo_ia", _with_user_session(cmd_consejo_ia)))
+    app.add_handler(CommandHandler("consejollm", _with_user_session(cmd_consejo_ia)))
     app.add_handler(CommandHandler("actas", _with_user_session(cmd_actas)))
     app.add_handler(CommandHandler("acta", _with_user_session(cmd_acta)))
     consejo_conv = ConversationHandler(
