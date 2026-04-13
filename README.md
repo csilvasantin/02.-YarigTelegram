@@ -1,6 +1,6 @@
 # Yarig.Telegram
 
-Version actual: `v.2026.13.04.9`
+Version actual: `v.2026.13.04.10`
 
 Proyecto oficial en GitHub: [csilvasantin/02.-YarigTelegram](https://github.com/csilvasantin/02.-YarigTelegram)
 
@@ -120,6 +120,10 @@ Documentacion completa de los 25 endpoints JSON en [docs/yarig_api_map.md](docs/
 ## Blueprint de producto
 
 La vision funcional de Yarig.Telegram como capa movil de Yarig.ai y base para una futura Yarig.ai IA-first esta documentada en [docs/yarig_product_blueprint.md](docs/yarig_product_blueprint.md).
+
+## Consejo AdmiraNext desde Telegram
+
+La integracion completa con la web del Consejo AdmiraNext, sus comandos de Telegram, variables locales, puertos, modelo gratuito Llama 3.3 y pruebas operativas esta documentada en [docs/consejo_admiranext_telegram.md](docs/consejo_admiranext_telegram.md).
 
 ## Tech Stack
 

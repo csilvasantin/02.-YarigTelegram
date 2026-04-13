@@ -66,7 +66,7 @@ PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
-APP_VERSION = "v.2026.13.04.9"
+APP_VERSION = "v.2026.13.04.10"
 
 
 class YarigSessionRouter:

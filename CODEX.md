@@ -1,7 +1,7 @@
 # Proyecto 09 — Yarig.Telegram
 
 Repositorio oficial: **https://github.com/csilvasantin/02.-YarigTelegram**
-Version desplegada: **v.2026.13.04.9**
+Version desplegada: **v.2026.13.04.10**
 
 ## Estado (2026-04-08): BOT PROPIO @YarimTelegramBot OPERATIVO EN MAC MINI
 
@@ -20,6 +20,7 @@ Bot propio: **@YarimTelegramBot** (token independiente, sin conflicto 409 con Me
 - auto-refresh del panel tras crear tarea
 - zona horaria Europe/Madrid en todas las horas mostradas
 - blueprint de producto para convertir Yarig.ai completo a Telegram y disenar la futura Yarig.ai IA-first (`docs/yarig_product_blueprint.md`)
+- documentacion operativa de Telegram con Consejo AdmiraNext (`docs/consejo_admiranext_telegram.md`)
 
 ## Comandos Yarig
 - `/login`, `/logout`, `/cuenta` — conectar cada usuario de Telegram con sus credenciales de Yarig.ai
