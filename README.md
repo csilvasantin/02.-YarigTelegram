@@ -17,6 +17,13 @@ Replica la operativa diaria de Yarig.ai dentro de Telegram para que el equipo pu
 
 ## Comandos
 
+### Cuenta
+| Comando | Descripcion |
+|---------|-------------|
+| `/login` | Conectar tu usuario de Yarig.ai en este bot |
+| `/logout` | Cerrar tu sesion de Yarig.ai en este bot |
+| `/cuenta` | Ver que usuario de Yarig.ai esta conectado |
+
 ### Tareas
 | Comando | Descripcion |
 |---------|-------------|

@@ -5,6 +5,7 @@ if sys.platform == "win32":
     import asyncio
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+import contextvars
 import logging
 import random
 import secrets
@@ -47,11 +48,36 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-yarig = YarigClient()
+CURRENT_USER_ID: contextvars.ContextVar[int | None] = contextvars.ContextVar("current_user_id", default=None)
+DEFAULT_YARIG = YarigClient()
+USER_YARIG_CLIENTS: dict[int, YarigClient] = {}
 PENDING_REQUESTS: dict[str, dict] = {}
 PENDING_TASKS: dict[str, dict] = {}
+PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
+LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
+
+
+class YarigSessionRouter:
+    """Delegate Yarig calls to the logged-in Telegram user's client."""
+
+    def _client(self) -> YarigClient:
+        user_id = CURRENT_USER_ID.get()
+        if user_id is not None and user_id in USER_YARIG_CLIENTS:
+            return USER_YARIG_CLIENTS[user_id]
+        return DEFAULT_YARIG
+
+    def __getattr__(self, name: str):
+        return getattr(self._client(), name)
+
+    async def close(self) -> None:
+        await DEFAULT_YARIG.close()
+        for client in list(USER_YARIG_CLIENTS.values()):
+            await client.close()
+
+
+yarig = YarigSessionRouter()
 
 
 RANDOM_TASK_TEMPLATES = [
@@ -71,6 +97,10 @@ RANDOM_TASK_TEMPLATES = [
 HELP_TEXT = (
     "✦ Yarig.Telegram\n"
     "Control de Yarig.ai desde Telegram\n\n"
+    "Cuenta\n"
+    "/login — Conectar tu usuario de Yarig.ai\n"
+    "/logout — Cerrar tu sesion en este bot\n"
+    "/cuenta — Ver que usuario esta conectado\n\n"
     "Tareas\n"
     "/yarig — Panel de tareas con controles\n"
     "/tarea — Añadir tarea directa\n"
@@ -102,6 +132,32 @@ HELP_TEXT = (
     "/chatid — Id del chat actual\n\n"
     "/help — Esta ayuda"
 )
+
+
+def _current_user_id(update: Update) -> int | None:
+    return update.effective_user.id if update.effective_user else None
+
+
+def _with_user_session(handler):
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        token = CURRENT_USER_ID.set(_current_user_id(update))
+        try:
+            return await handler(update, context)
+        finally:
+            CURRENT_USER_ID.reset(token)
+
+    return wrapped
+
+
+def _mask_email(email: str) -> str:
+    if "@" not in email:
+        return email[:2] + "***" if len(email) > 2 else "***"
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        local_masked = local[:1] + "***"
+    else:
+        local_masked = local[:2] + "***" + local[-1:]
+    return f"{local_masked}@{domain}"
 
 # Conversation state for interactive consejo flow
 CONSEJO_AWAITING_TASK = 0
@@ -906,6 +962,101 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 
+async def cmd_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start Yarig.ai login flow for this Telegram user."""
+    user_id = _current_user_id(update)
+    if user_id is None:
+        await update.message.reply_text("No puedo identificar tu usuario de Telegram en este chat.")
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "Vamos a conectar tu usuario de Yarig.ai.\n\n"
+        "Enviame tu email de Yarig.ai. Puedes cancelar con /cancelar.",
+        parse_mode=None,
+    )
+    return LOGIN_EMAIL
+
+
+async def process_login_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Store the email temporarily and ask for password."""
+    user_id = _current_user_id(update)
+    email = (update.message.text or "").strip() if update.message else ""
+    if user_id is None or not email or "@" not in email:
+        await update.message.reply_text("Ese email no parece valido. Enviame el email de Yarig.ai o /cancelar.")
+        return LOGIN_EMAIL
+    PENDING_LOGIN_EMAIL[user_id] = email
+    await update.message.reply_text(
+        f"Email recibido: {_mask_email(email)}\n\n"
+        "Ahora enviame la password de Yarig.ai. La pruebo contra Yarig.ai y no la escribo en disco.",
+        parse_mode=None,
+    )
+    return LOGIN_PASSWORD
+
+
+async def process_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Validate credentials against Yarig.ai and keep an in-memory client."""
+    user_id = _current_user_id(update)
+    password = (update.message.text or "").strip() if update.message else ""
+    email = PENDING_LOGIN_EMAIL.pop(user_id, "") if user_id is not None else ""
+    if user_id is None or not email or not password:
+        await update.message.reply_text("No he podido completar el login. Usa /login otra vez.")
+        return ConversationHandler.END
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    await update.effective_chat.send_message("Probando credenciales con Yarig.ai...", parse_mode=None)
+    client = YarigClient(email=email, password=password)
+    if not await client.login():
+        await client.close()
+        await update.effective_chat.send_message(
+            "No he podido entrar en Yarig.ai con esas credenciales. Usa /login para intentarlo de nuevo.",
+            parse_mode=None,
+        )
+        return ConversationHandler.END
+
+    old_client = USER_YARIG_CLIENTS.pop(user_id, None)
+    if old_client:
+        await old_client.close()
+    USER_YARIG_CLIENTS[user_id] = client
+    await update.effective_chat.send_message(
+        f"Sesion conectada para {_mask_email(email)}.\n"
+        "Ya puedes usar /tarea, /yarig, /fichar y el resto de comandos con tu usuario.",
+        parse_mode=None,
+    )
+    return ConversationHandler.END
+
+
+async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Close this Telegram user's Yarig session."""
+    user_id = _current_user_id(update)
+    client = USER_YARIG_CLIENTS.pop(user_id, None) if user_id is not None else None
+    PENDING_LOGIN_EMAIL.pop(user_id, None) if user_id is not None else None
+    if client:
+        await client.close()
+        await update.message.reply_text("Sesion de Yarig.ai cerrada en este bot.", parse_mode=None)
+        return
+    await update.message.reply_text("No habia una sesion personalizada abierta. Usa /login para conectar.", parse_mode=None)
+
+
+async def cmd_cuenta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the current Telegram user's Yarig session status."""
+    user_id = _current_user_id(update)
+    client = USER_YARIG_CLIENTS.get(user_id) if user_id is not None else None
+    if client:
+        await update.message.reply_text(f"Conectado como {_mask_email(client.email)}.", parse_mode=None)
+        return
+    if DEFAULT_YARIG.email:
+        await update.message.reply_text(
+            f"Usando la cuenta por defecto del bot: {_mask_email(DEFAULT_YARIG.email)}.\n"
+            "Usa /login para conectar tu propio usuario.",
+            parse_mode=None,
+        )
+        return
+    await update.message.reply_text("No hay cuenta Yarig.ai conectada. Usa /login.", parse_mode=None)
+
+
 async def cmd_mision_dia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Create the opening mission for today on demand."""
     created, task_text = await yarig.ensure_daily_opening_task()
@@ -1105,9 +1256,12 @@ async def cmd_acta(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel an in-progress consejo consultation."""
+    """Cancel an in-progress conversation."""
     context.user_data.pop("consejo_target", None)
-    await update.message.reply_text("Consulta cancelada.")
+    user_id = _current_user_id(update)
+    if user_id is not None:
+        PENDING_LOGIN_EMAIL.pop(user_id, None)
+    await update.message.reply_text("Cancelado.")
     return ConversationHandler.END
 
 
@@ -1121,51 +1275,70 @@ def main():
     defaults = Defaults(tzinfo=MADRID_TZ)
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
 
-    # Commands
-    app.add_handler(CommandHandler("yarig", cmd_yarig))
-    app.add_handler(CommandHandler("fichar", cmd_fichar))
-    app.add_handler(CommandHandler("tarea", cmd_tarea))
-    app.add_handler(CommandHandler("random", cmd_random))
-    app.add_handler(CommandHandler("iniciar", cmd_iniciar))
-    app.add_handler(CommandHandler("pausar", cmd_pausar))
-    app.add_handler(CommandHandler("finalizar", cmd_finalizar))
-    app.add_handler(CommandHandler("estado", cmd_estado))
-    app.add_handler(CommandHandler("score", cmd_score))
-    app.add_handler(CommandHandler("historial", cmd_historial))
-    app.add_handler(CommandHandler("notificaciones", cmd_notificaciones))
-    app.add_handler(CommandHandler("extras", cmd_extras))
-    app.add_handler(CommandHandler("equipo", cmd_equipo))
-    app.add_handler(CommandHandler("ranking", cmd_ranking))
-    app.add_handler(CommandHandler("dedicacion", cmd_dedicacion))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("puntos", cmd_puntos))
-    app.add_handler(CommandHandler("pedir", cmd_pedir))
-    app.add_handler(CommandHandler("peticiones", cmd_peticiones))
-    app.add_handler(CommandHandler("clientes", cmd_clientes))
-    app.add_handler(CommandHandler("cliente", cmd_cliente))
-    app.add_handler(CommandHandler("proyectos", cmd_proyectos))
-    app.add_handler(CommandHandler("proyecto", cmd_proyecto))
-    app.add_handler(CommandHandler("chatid", cmd_chatid))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("start", cmd_help))
-    app.add_handler(CommandHandler("resumen_diario", cmd_resumen_diario))
-    app.add_handler(CommandHandler("mision_dia", cmd_mision_dia))
-    app.add_handler(CommandHandler("onboarding", cmd_onboarding))
-    app.add_handler(CommandHandler("offboarding", cmd_offboarding))
-
-    # Consejo de Administracion
-    app.add_handler(CommandHandler("consejo", cmd_consejo))
-    app.add_handler(CommandHandler("consulta", cmd_consulta))
-    app.add_handler(CommandHandler("actas", cmd_actas))
-    app.add_handler(CommandHandler("acta", cmd_acta))
-    consejo_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(consejo_callback, pattern=r"^consejo:")],
+    login_conv = ConversationHandler(
+        entry_points=[CommandHandler("login", _with_user_session(cmd_login))],
         states={
-            CONSEJO_AWAITING_TASK: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_consejo_task),
+            LOGIN_EMAIL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _with_user_session(process_login_email)),
+            ],
+            LOGIN_PASSWORD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _with_user_session(process_login_password)),
             ],
         },
-        fallbacks=[CommandHandler("cancelar", cmd_cancelar)],
+        fallbacks=[CommandHandler("cancelar", _with_user_session(cmd_cancelar))],
+        per_user=True,
+        per_chat=True,
+        name="yarig_login_conversation",
+    )
+    app.add_handler(login_conv)
+
+    # Commands
+    app.add_handler(CommandHandler("yarig", _with_user_session(cmd_yarig)))
+    app.add_handler(CommandHandler("fichar", _with_user_session(cmd_fichar)))
+    app.add_handler(CommandHandler("tarea", _with_user_session(cmd_tarea)))
+    app.add_handler(CommandHandler("random", _with_user_session(cmd_random)))
+    app.add_handler(CommandHandler("iniciar", _with_user_session(cmd_iniciar)))
+    app.add_handler(CommandHandler("pausar", _with_user_session(cmd_pausar)))
+    app.add_handler(CommandHandler("finalizar", _with_user_session(cmd_finalizar)))
+    app.add_handler(CommandHandler("estado", _with_user_session(cmd_estado)))
+    app.add_handler(CommandHandler("score", _with_user_session(cmd_score)))
+    app.add_handler(CommandHandler("historial", _with_user_session(cmd_historial)))
+    app.add_handler(CommandHandler("notificaciones", _with_user_session(cmd_notificaciones)))
+    app.add_handler(CommandHandler("extras", _with_user_session(cmd_extras)))
+    app.add_handler(CommandHandler("equipo", _with_user_session(cmd_equipo)))
+    app.add_handler(CommandHandler("ranking", _with_user_session(cmd_ranking)))
+    app.add_handler(CommandHandler("dedicacion", _with_user_session(cmd_dedicacion)))
+    app.add_handler(CommandHandler("stats", _with_user_session(cmd_stats)))
+    app.add_handler(CommandHandler("puntos", _with_user_session(cmd_puntos)))
+    app.add_handler(CommandHandler("pedir", _with_user_session(cmd_pedir)))
+    app.add_handler(CommandHandler("peticiones", _with_user_session(cmd_peticiones)))
+    app.add_handler(CommandHandler("clientes", _with_user_session(cmd_clientes)))
+    app.add_handler(CommandHandler("cliente", _with_user_session(cmd_cliente)))
+    app.add_handler(CommandHandler("proyectos", _with_user_session(cmd_proyectos)))
+    app.add_handler(CommandHandler("proyecto", _with_user_session(cmd_proyecto)))
+    app.add_handler(CommandHandler("chatid", _with_user_session(cmd_chatid)))
+    app.add_handler(CommandHandler("logout", _with_user_session(cmd_logout)))
+    app.add_handler(CommandHandler("cuenta", _with_user_session(cmd_cuenta)))
+    app.add_handler(CommandHandler("help", _with_user_session(cmd_help)))
+    app.add_handler(CommandHandler("start", _with_user_session(cmd_help)))
+    app.add_handler(CommandHandler("resumen_diario", _with_user_session(cmd_resumen_diario)))
+    app.add_handler(CommandHandler("mision_dia", _with_user_session(cmd_mision_dia)))
+    app.add_handler(CommandHandler("onboarding", _with_user_session(cmd_onboarding)))
+    app.add_handler(CommandHandler("offboarding", _with_user_session(cmd_offboarding)))
+
+    # Consejo de Administracion
+    app.add_handler(CommandHandler("consejo", _with_user_session(cmd_consejo)))
+    app.add_handler(CommandHandler("consulta", _with_user_session(cmd_consulta)))
+    app.add_handler(CommandHandler("actas", _with_user_session(cmd_actas)))
+    app.add_handler(CommandHandler("acta", _with_user_session(cmd_acta)))
+    consejo_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(_with_user_session(consejo_callback), pattern=r"^consejo:")],
+        states={
+            CONSEJO_AWAITING_TASK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _with_user_session(process_consejo_task)),
+            ],
+        },
+        fallbacks=[CommandHandler("cancelar", _with_user_session(cmd_cancelar))],
         per_user=True,
         per_chat=True,
         name="consejo_conversation",
@@ -1173,11 +1346,11 @@ def main():
     app.add_handler(consejo_conv)
 
     # Callbacks
-    app.add_handler(CallbackQueryHandler(handle_yarig_control, pattern="^yt_"))
-    app.add_handler(CallbackQueryHandler(handle_request_priority, pattern="^yreq_"))
-    app.add_handler(CallbackQueryHandler(handle_requests_inbox, pattern="^yrq_"))
-    app.add_handler(CallbackQueryHandler(handle_task_project_picker, pattern="^ytask_"))
-    app.add_handler(CallbackQueryHandler(handle_noop, pattern="^noop$"))
+    app.add_handler(CallbackQueryHandler(_with_user_session(handle_yarig_control), pattern="^yt_"))
+    app.add_handler(CallbackQueryHandler(_with_user_session(handle_request_priority), pattern="^yreq_"))
+    app.add_handler(CallbackQueryHandler(_with_user_session(handle_requests_inbox), pattern="^yrq_"))
+    app.add_handler(CallbackQueryHandler(_with_user_session(handle_task_project_picker), pattern="^ytask_"))
+    app.add_handler(CallbackQueryHandler(_with_user_session(handle_noop), pattern="^noop$"))
 
     async def _shutdown(_: Application) -> None:
         await yarig.close()
