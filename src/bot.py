@@ -57,7 +57,7 @@ PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
-APP_VERSION = "v.2026.13.04.2"
+APP_VERSION = "v.2026.13.04.3"
 
 
 class YarigSessionRouter:
@@ -159,6 +159,42 @@ def _with_user_session(handler):
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token = CURRENT_USER_ID.set(_current_user_id(update))
         try:
+            return await handler(update, context)
+        finally:
+            CURRENT_USER_ID.reset(token)
+
+    return wrapped
+
+
+def _has_yarig_account(user_id: int | None) -> bool:
+    if user_id is not None and user_id in USER_YARIG_CLIENTS:
+        return True
+    return bool(DEFAULT_YARIG.email and DEFAULT_YARIG.password)
+
+
+async def _reply_yarig_login_required(update: Update) -> None:
+    text = (
+        "No hay una cuenta de Yarig.ai conectada en este bot.\n\n"
+        "Usa /login y envia tu email y password de Yarig.ai. "
+        "Despues podras usar /yarig, /tarea, /personal, /equipo, /finanzas y /marca."
+    )
+    if update.callback_query:
+        await update.callback_query.answer("Conecta Yarig.ai con /login", show_alert=True)
+        if update.callback_query.message:
+            await update.callback_query.message.reply_text(text, parse_mode=None)
+        return
+    if update.effective_message:
+        await update.effective_message.reply_text(text, parse_mode=None)
+
+
+def _with_yarig_account(handler):
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = _current_user_id(update)
+        token = CURRENT_USER_ID.set(user_id)
+        try:
+            if not _has_yarig_account(user_id):
+                await _reply_yarig_login_required(update)
+                return None
             return await handler(update, context)
         finally:
             CURRENT_USER_ID.reset(token)
@@ -1334,42 +1370,42 @@ def main():
     app.add_handler(login_conv)
 
     # Commands
-    app.add_handler(CommandHandler("yarig", _with_user_session(cmd_yarig)))
-    app.add_handler(CommandHandler("fichar", _with_user_session(cmd_fichar)))
-    app.add_handler(CommandHandler("tarea", _with_user_session(cmd_tarea)))
-    app.add_handler(CommandHandler("random", _with_user_session(cmd_random)))
-    app.add_handler(CommandHandler("iniciar", _with_user_session(cmd_iniciar)))
-    app.add_handler(CommandHandler("pausar", _with_user_session(cmd_pausar)))
-    app.add_handler(CommandHandler("finalizar", _with_user_session(cmd_finalizar)))
-    app.add_handler(CommandHandler("estado", _with_user_session(cmd_estado)))
-    app.add_handler(CommandHandler("personal", _with_user_session(cmd_personal)))
-    app.add_handler(CommandHandler("score", _with_user_session(cmd_score)))
-    app.add_handler(CommandHandler("historial", _with_user_session(cmd_historial)))
-    app.add_handler(CommandHandler("notificaciones", _with_user_session(cmd_notificaciones)))
-    app.add_handler(CommandHandler("extras", _with_user_session(cmd_extras)))
-    app.add_handler(CommandHandler("equipo", _with_user_session(cmd_equipo)))
-    app.add_handler(CommandHandler("equipo_lista", _with_user_session(cmd_equipo_lista)))
-    app.add_handler(CommandHandler("finanzas", _with_user_session(cmd_finanzas)))
-    app.add_handler(CommandHandler("marca", _with_user_session(cmd_marca)))
-    app.add_handler(CommandHandler("ranking", _with_user_session(cmd_ranking)))
-    app.add_handler(CommandHandler("dedicacion", _with_user_session(cmd_dedicacion)))
-    app.add_handler(CommandHandler("stats", _with_user_session(cmd_stats)))
-    app.add_handler(CommandHandler("puntos", _with_user_session(cmd_puntos)))
-    app.add_handler(CommandHandler("pedir", _with_user_session(cmd_pedir)))
-    app.add_handler(CommandHandler("peticiones", _with_user_session(cmd_peticiones)))
-    app.add_handler(CommandHandler("clientes", _with_user_session(cmd_clientes)))
-    app.add_handler(CommandHandler("cliente", _with_user_session(cmd_cliente)))
-    app.add_handler(CommandHandler("proyectos", _with_user_session(cmd_proyectos)))
-    app.add_handler(CommandHandler("proyecto", _with_user_session(cmd_proyecto)))
+    app.add_handler(CommandHandler("yarig", _with_yarig_account(cmd_yarig)))
+    app.add_handler(CommandHandler("fichar", _with_yarig_account(cmd_fichar)))
+    app.add_handler(CommandHandler("tarea", _with_yarig_account(cmd_tarea)))
+    app.add_handler(CommandHandler("random", _with_yarig_account(cmd_random)))
+    app.add_handler(CommandHandler("iniciar", _with_yarig_account(cmd_iniciar)))
+    app.add_handler(CommandHandler("pausar", _with_yarig_account(cmd_pausar)))
+    app.add_handler(CommandHandler("finalizar", _with_yarig_account(cmd_finalizar)))
+    app.add_handler(CommandHandler("estado", _with_yarig_account(cmd_estado)))
+    app.add_handler(CommandHandler("personal", _with_yarig_account(cmd_personal)))
+    app.add_handler(CommandHandler("score", _with_yarig_account(cmd_score)))
+    app.add_handler(CommandHandler("historial", _with_yarig_account(cmd_historial)))
+    app.add_handler(CommandHandler("notificaciones", _with_yarig_account(cmd_notificaciones)))
+    app.add_handler(CommandHandler("extras", _with_yarig_account(cmd_extras)))
+    app.add_handler(CommandHandler("equipo", _with_yarig_account(cmd_equipo)))
+    app.add_handler(CommandHandler("equipo_lista", _with_yarig_account(cmd_equipo_lista)))
+    app.add_handler(CommandHandler("finanzas", _with_yarig_account(cmd_finanzas)))
+    app.add_handler(CommandHandler("marca", _with_yarig_account(cmd_marca)))
+    app.add_handler(CommandHandler("ranking", _with_yarig_account(cmd_ranking)))
+    app.add_handler(CommandHandler("dedicacion", _with_yarig_account(cmd_dedicacion)))
+    app.add_handler(CommandHandler("stats", _with_yarig_account(cmd_stats)))
+    app.add_handler(CommandHandler("puntos", _with_yarig_account(cmd_puntos)))
+    app.add_handler(CommandHandler("pedir", _with_yarig_account(cmd_pedir)))
+    app.add_handler(CommandHandler("peticiones", _with_yarig_account(cmd_peticiones)))
+    app.add_handler(CommandHandler("clientes", _with_yarig_account(cmd_clientes)))
+    app.add_handler(CommandHandler("cliente", _with_yarig_account(cmd_cliente)))
+    app.add_handler(CommandHandler("proyectos", _with_yarig_account(cmd_proyectos)))
+    app.add_handler(CommandHandler("proyecto", _with_yarig_account(cmd_proyecto)))
     app.add_handler(CommandHandler("chatid", _with_user_session(cmd_chatid)))
     app.add_handler(CommandHandler("logout", _with_user_session(cmd_logout)))
     app.add_handler(CommandHandler("cuenta", _with_user_session(cmd_cuenta)))
     app.add_handler(CommandHandler("help", _with_user_session(cmd_help)))
     app.add_handler(CommandHandler("start", _with_user_session(cmd_help)))
-    app.add_handler(CommandHandler("resumen_diario", _with_user_session(cmd_resumen_diario)))
-    app.add_handler(CommandHandler("mision_dia", _with_user_session(cmd_mision_dia)))
-    app.add_handler(CommandHandler("onboarding", _with_user_session(cmd_onboarding)))
-    app.add_handler(CommandHandler("offboarding", _with_user_session(cmd_offboarding)))
+    app.add_handler(CommandHandler("resumen_diario", _with_yarig_account(cmd_resumen_diario)))
+    app.add_handler(CommandHandler("mision_dia", _with_yarig_account(cmd_mision_dia)))
+    app.add_handler(CommandHandler("onboarding", _with_yarig_account(cmd_onboarding)))
+    app.add_handler(CommandHandler("offboarding", _with_yarig_account(cmd_offboarding)))
 
     # Consejo de Administracion
     app.add_handler(CommandHandler("consejo", _with_user_session(cmd_consejo)))
@@ -1391,10 +1427,10 @@ def main():
     app.add_handler(consejo_conv)
 
     # Callbacks
-    app.add_handler(CallbackQueryHandler(_with_user_session(handle_yarig_control), pattern="^yt_"))
-    app.add_handler(CallbackQueryHandler(_with_user_session(handle_request_priority), pattern="^yreq_"))
-    app.add_handler(CallbackQueryHandler(_with_user_session(handle_requests_inbox), pattern="^yrq_"))
-    app.add_handler(CallbackQueryHandler(_with_user_session(handle_task_project_picker), pattern="^ytask_"))
+    app.add_handler(CallbackQueryHandler(_with_yarig_account(handle_yarig_control), pattern="^yt_"))
+    app.add_handler(CallbackQueryHandler(_with_yarig_account(handle_request_priority), pattern="^yreq_"))
+    app.add_handler(CallbackQueryHandler(_with_yarig_account(handle_requests_inbox), pattern="^yrq_"))
+    app.add_handler(CallbackQueryHandler(_with_yarig_account(handle_task_project_picker), pattern="^ytask_"))
     app.add_handler(CallbackQueryHandler(_with_user_session(handle_noop), pattern="^noop$"))
 
     async def _shutdown(_: Application) -> None:

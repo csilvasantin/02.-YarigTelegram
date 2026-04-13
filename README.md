@@ -1,6 +1,6 @@
 # Yarig.Telegram
 
-Version actual: `v.2026.13.04.2`
+Version actual: `v.2026.13.04.3`
 
 Proyecto oficial en GitHub: [csilvasantin/02.-YarigTelegram](https://github.com/csilvasantin/02.-YarigTelegram)
 
