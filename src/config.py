@@ -12,7 +12,7 @@ YARIG_EMAIL = os.getenv("YARIG_EMAIL", "")
 YARIG_PASSWORD = os.getenv("YARIG_PASSWORD", "")
 
 # Consejo AdmiraNext Game
-CONSEJO_GAME_API_URL = os.getenv("CONSEJO_GAME_API_URL", "http://127.0.0.1:3030")
+CONSEJO_GAME_API_URL = os.getenv("CONSEJO_GAME_API_URL", "http://127.0.0.1:9125")
 
 # Consejo de Administracion — LLM (desactivado por defecto, usa templates)
 CONSEJO_USE_LLM = os.getenv("CONSEJO_USE_LLM", "false").lower() == "true"
