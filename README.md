@@ -90,6 +90,10 @@ python -m src.bot
 
 Documentacion completa de los 25 endpoints JSON en [docs/yarig_api_map.md](docs/yarig_api_map.md).
 
+## Blueprint de producto
+
+La vision funcional de Yarig.Telegram como capa movil de Yarig.ai y base para una futura Yarig.ai IA-first esta documentada en [docs/yarig_product_blueprint.md](docs/yarig_product_blueprint.md).
+
 ## Tech Stack
 
 - Python 3.13+

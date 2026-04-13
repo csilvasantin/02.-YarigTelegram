@@ -16,6 +16,7 @@ Bot propio: **@YarimTelegramBot** (token independiente, sin conflicto 409 con Me
 - **dedicacion del equipo** en tiempo real (`/dedicacion`)
 - auto-refresh del panel tras crear tarea
 - zona horaria Europe/Madrid en todas las horas mostradas
+- blueprint de producto para convertir Yarig.ai completo a Telegram y disenar la futura Yarig.ai IA-first (`docs/yarig_product_blueprint.md`)
 
 ## Comandos Yarig
 - `/yarig`, `/tarea`, `/iniciar`, `/pausar`, `/finalizar`
@@ -95,3 +96,8 @@ Antes de cerrar una sesion, dejar siempre documentado:
 - que queda pendiente
 - si el servicio sigue corriendo
 - si se ha subido a GitHub
+
+## Direccion producto
+- Yarig.Telegram debe mapear toda la plataforma Yarig.ai y convertirla en operativa movil.
+- Cada modulo debe indicar cobertura actual en Telegram, endpoints usados, gaps y comandos propuestos.
+- La nueva Yarig.ai se disenara desde los workflows reales descubiertos en Telegram, con look and feel moderno e IA nativa.
