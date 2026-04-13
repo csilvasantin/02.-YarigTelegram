@@ -28,6 +28,7 @@ from telegram.constants import ParseMode
 from src.config import (
     CONSEJO_GAME_API_URL,
     CONSEJO_WEB_LLM_API_URL,
+    CONSEJO_WEB_LLM_MODEL,
     CONSEJO_WEB_LLM_TOKEN,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_DAILY_CHAT_ID,
@@ -65,7 +66,7 @@ PENDING_LOGIN_EMAIL: dict[int, str] = {}
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
-APP_VERSION = "v.2026.13.04.8"
+APP_VERSION = "v.2026.13.04.9"
 
 
 class YarigSessionRouter:
@@ -154,7 +155,7 @@ HELP_TEXT = (
     "/consejoweb texto — Enviar mision a la web del Consejo\n"
     "/consejoweb codex :: texto — Enviar solo a Codex\n"
     "/consejoweb claude :: texto — Enviar solo a Claude\n"
-    "/consejoia texto — Preguntar al LLM gratuito del Consejo\n"
+    "/consejoia texto — Preguntar al Consejo con Llama 3.3 gratuito\n"
     "/consejoia coetaneos :: texto — Preguntar al Consejo coetaneo\n\n"
     "Contexto\n"
     "/proyectos — Lista o busca proyectos\n"
@@ -298,7 +299,12 @@ async def ask_council_web_llm(prompt: str, generation: str = "leyendas") -> dict
         async with session.post(
             f"{api_base}/api/council/ask",
             headers=headers,
-            json={"message": prompt, "generation": generation, "context": []},
+            json={
+                "message": prompt,
+                "generation": generation,
+                "context": [],
+                "llm": CONSEJO_WEB_LLM_MODEL,
+            },
         ) as response:
             data = await response.json(content_type=None)
             if response.status >= 400:
@@ -310,6 +316,7 @@ def _format_council_llm_response(prompt: str, generation: str, result: dict) -> 
     lines = [
         "Consejo AdmiraNext IA",
         f"Generacion: {generation}",
+        f"Modelo: {CONSEJO_WEB_LLM_MODEL} (Llama 3.3 gratuito)",
         f"Pregunta: {prompt}",
         "",
         "Racional",

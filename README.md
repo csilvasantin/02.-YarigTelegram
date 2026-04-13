@@ -1,6 +1,6 @@
 # Yarig.Telegram
 
-Version actual: `v.2026.13.04.8`
+Version actual: `v.2026.13.04.9`
 
 Proyecto oficial en GitHub: [csilvasantin/02.-YarigTelegram](https://github.com/csilvasantin/02.-YarigTelegram)
 
@@ -79,7 +79,7 @@ Formato con proyecto: `/tarea Proyecto :: Descripcion`
 | `/consejoweb <mision>` | Enviar una mision al Consejo AdmiraNext web via `CONSEJO_GAME_API_URL` |
 | `/consejoweb codex :: <mision>` | Enviar una mision solo a Codex |
 | `/consejoweb claude :: <mision>` | Enviar una mision solo a Claude |
-| `/consejoia <pregunta>` | Consultar al LLM gratuito del Consejo AdmiraNext |
+| `/consejoia <pregunta>` | Consultar al Consejo AdmiraNext con Llama 3.3 gratuito (`llama-70b`) |
 | `/consejoia coetaneos :: <pregunta>` | Consultar a la generacion coetanea del Consejo |
 
 ## Automatizaciones diarias
