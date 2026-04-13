@@ -1,6 +1,8 @@
 # Yarig.Telegram
 
-Version actual: `v.2026.13.04.1`
+Version actual: `v.2026.13.04.2`
+
+Proyecto oficial en GitHub: [csilvasantin/02.-YarigTelegram](https://github.com/csilvasantin/02.-YarigTelegram)
 
 Control completo de [Yarig.ai](https://yarig.ai) desde Telegram con panel interactivo de tareas, resumenes automaticos y arranque diario de mision.
 
